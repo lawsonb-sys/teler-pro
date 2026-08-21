@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:teler_pro/models/model.dart';
-import 'package:teler_pro/models/pocketbase.dart';
 import 'package:teler_pro/outils/accueil_ctr.dart';
 import 'package:teler_pro/outils/accueil_rapo.dart';
-import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/outils/themes.dart';
 import 'package:teler_pro/pages/commandes/nvcommande.dart';
 import 'package:teler_pro/pages/paimentcmd.dart';
@@ -25,6 +23,15 @@ class _AccueilPageState extends State<AccueilPage> {
     super.initState();
     _controller = AccueilController();
     _controller.charger();
+  }
+
+  String getSalutation() {
+    final hour = DateTime.now().hour;
+    if (hour >= 5 && hour < 12) {
+      return 'BONJOUR';
+    } else {
+      return 'BONSOIR';
+    }
   }
 
   @override
@@ -98,7 +105,7 @@ class _AccueilPageState extends State<AccueilPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'BONSOIR',
+            getSalutation(),
             style: TextStyle(
               fontSize: 11,
               letterSpacing: 1.2,

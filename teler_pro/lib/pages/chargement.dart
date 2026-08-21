@@ -13,7 +13,7 @@ class ChargementPage extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
-              'Kutura',
+              'Teler Pro',
               style: TextStyle(
                 fontSize: 26,
                 fontWeight: FontWeight.w600,

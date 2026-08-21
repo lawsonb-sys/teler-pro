@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:teler_pro/models/mockdata.dart';
 import 'package:teler_pro/models/model.dart';
+import 'package:teler_pro/models/pocketbase.dart';
+import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/outils/themes.dart';
 import 'package:teler_pro/pages/paimentcmd.dart';
 
@@ -14,6 +15,7 @@ class CommandesPage extends StatefulWidget {
 
 class _CommandesPageState extends State<CommandesPage> {
   String _filtre = 'toutes';
+  late Future<List<CommandeModel>> _future;
 
   final _filtres = const [
     ('toutes', 'Toutes'),
@@ -24,11 +26,57 @@ class _CommandesPageState extends State<CommandesPage> {
   ];
 
   @override
-  Widget build(BuildContext context) {
-    final commandes = _filtre == 'toutes'
-        ? MockData.commandes
-        : MockData.commandes.where((c) => c.statut == _filtre).toList();
+  void initState() {
+    super.initState();
+    _future = _charger();
+  }
 
+  Future<List<CommandeModel>> _charger() async {
+    final atelier = await atelierService.atelierCourant();
+
+    // Filtre construit dynamiquement : toujours restreint à l'atelier courant,
+    // et en plus au statut sélectionné si ce n'est pas "toutes".
+    var filtre = 'atelier = "${atelier.id}"';
+    if (_filtre != 'toutes') {
+      filtre += ' && statut = "$_filtre"';
+    }
+
+    final records = await pb
+        .collection('commandes')
+        .getFullList(
+          filter: filtre,
+          sort: 'date_livraison_prevue',
+          expand: 'client',
+        );
+
+    final commandes = <CommandeModel>[];
+    for (final r in records) {
+      final paiements = await pb
+          .collection('paiements')
+          .getFullList(filter: 'commande = "${r.id}"');
+      final montantPaye = paiements.fold<double>(
+        0,
+        (s, p) => s + (p.data['montant'] as num).toDouble(),
+      );
+      commandes.add(CommandeModel.fromRecord(r, montantPaye: montantPaye));
+    }
+    return commandes;
+  }
+
+  void _appliquerFiltre(String f) {
+    setState(() {
+      _filtre = f;
+      _future = _charger();
+    });
+  }
+
+  Future<void> _rafraichir() async {
+    setState(() => _future = _charger());
+    await _future;
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Commandes')),
       body: Column(
@@ -46,7 +94,7 @@ class _CommandesPageState extends State<CommandesPage> {
                   child: ChoiceChip(
                     label: Text(label),
                     selected: actif,
-                    onSelected: (_) => setState(() => _filtre = value),
+                    onSelected: (_) => _appliquerFiltre(value),
                     selectedColor: KColors.indigo,
                     labelStyle: TextStyle(
                       fontSize: 11,
@@ -62,19 +110,49 @@ class _CommandesPageState extends State<CommandesPage> {
             ),
           ),
           Expanded(
-            child: commandes.isEmpty
-                ? Center(
+            child: FutureBuilder<List<CommandeModel>>(
+              future: _future,
+              builder: (context, snap) {
+                if (snap.hasError) {
+                  return Center(
                     child: Text(
-                      'Aucune commande',
-                      style: TextStyle(color: KColors.muted),
+                      'Erreur : ${snap.error}',
+                      style: const TextStyle(color: KColors.terracotta),
                     ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    itemCount: commandes.length,
-                    itemBuilder: (context, i) =>
-                        _CommandeCard(commande: commandes[i]),
-                  ),
+                  );
+                }
+                if (!snap.hasData) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final commandes = snap.data!;
+                // RefreshIndicator enveloppe TOUJOURS un widget défilable,
+                // même l'état vide — sinon le tirer-actualiser ne répond pas
+                // (le bug qu'on avait eu sur ClientsPage).
+                return RefreshIndicator(
+                  onRefresh: _rafraichir,
+                  child: commandes.isEmpty
+                      ? ListView(
+                          children: [
+                            SizedBox(
+                              height: MediaQuery.of(context).size.height * 0.6,
+                              child: Center(
+                                child: Text(
+                                  'Aucune commande',
+                                  style: TextStyle(color: KColors.muted),
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          itemCount: commandes.length,
+                          itemBuilder: (context, i) =>
+                              _CommandeCard(commande: commandes[i]),
+                        ),
+                );
+              },
+            ),
           ),
         ],
       ),

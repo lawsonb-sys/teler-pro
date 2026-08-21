@@ -78,7 +78,7 @@ class _ConnexionPageState extends State<ConnexionPage> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Text(
-                'Kutura',
+                'Teler Pro',
                 style: TextStyle(
                   fontSize: 30,
                   fontWeight: FontWeight.w600,

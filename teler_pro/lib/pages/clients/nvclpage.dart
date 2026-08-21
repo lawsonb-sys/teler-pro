@@ -40,11 +40,12 @@ class _NouveauClientPageState extends State<NouveauClientPage> {
               'notes': _notesCtrl.text.trim(),
             },
           );
-      if (mounted)
+      if (mounted) {
         Navigator.pop(
           context,
           true,
         ); // true = signale à ClientsPage de rafraîchir
+      }
     } catch (e) {
       setState(() => _erreur = 'Une erreur est survenue : $e');
     } finally {
@@ -76,7 +77,10 @@ class _NouveauClientPageState extends State<NouveauClientPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextField(controller: _nomCtrl, decoration: _decoration('Nom')),
+            TextField(
+              controller: _nomCtrl,
+              decoration: _decoration('Nom et prénom'),
+            ),
             const SizedBox(height: 12),
             TextField(
               controller: _telephoneCtrl,

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:teler_pro/models/mockdata.dart';
 import 'package:teler_pro/models/model.dart';
-import 'package:teler_pro/outils/bottomnav.dart';
+import 'package:teler_pro/models/pocketbase.dart';
+import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/outils/themes.dart';
 
+/// [clientIdPreselectionne] : passé quand on arrive depuis la fiche client,
+/// pour pré-remplir le sélecteur de client.
 class NouvelleCommandePage extends StatefulWidget {
   final String? clientIdPreselectionne;
   const NouvelleCommandePage({super.key, this.clientIdPreselectionne});
@@ -19,6 +21,8 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
   DateTime? _dateLivraison;
   final _prixCtrl = TextEditingController();
   final _acompteCtrl = TextEditingController();
+  bool _envoiEnCours = false;
+  String? _erreur;
 
   final _typesVetement = const [
     'Robe pagne',
@@ -39,26 +43,73 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
   void initState() {
     super.initState();
     if (widget.clientIdPreselectionne != null) {
-      _clientSelectionne = MockData.clients.firstWhere(
-        (c) => c.id == widget.clientIdPreselectionne,
-        orElse: () => MockData.clients.first,
-      );
+      _chargerClientPreselectionne(widget.clientIdPreselectionne!);
     }
   }
 
-  void _creerCommande() {
+  Future<void> _chargerClientPreselectionne(String clientId) async {
+    final record = await pb.collection('clients').getOne(clientId);
+    if (mounted)
+      setState(() => _clientSelectionne = ClientModel.fromRecord(record));
+  }
+
+  Future<void> _creerCommande() async {
     if (_clientSelectionne == null ||
         _typeVetement == null ||
         _dateLivraison == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Merci de remplir les champs obligatoires'),
-        ),
-      );
+      setState(() => _erreur = 'Merci de remplir les champs obligatoires');
       return;
     }
-    // Pas de backend pour l'instant : on simule juste la création.
-    Navigator.pop(context, true);
+
+    setState(() {
+      _envoiEnCours = true;
+      _erreur = null;
+    });
+
+    try {
+      final atelier = await atelierService.atelierCourant();
+      final prixTotal =
+          double.tryParse(_prixCtrl.text.replaceAll(' ', '')) ?? 0;
+      final acompte =
+          double.tryParse(_acompteCtrl.text.replaceAll(' ', '')) ?? 0;
+
+      final commande = await pb
+          .collection('commandes')
+          .create(
+            body: {
+              'atelier': atelier.id,
+              'client': _clientSelectionne!.id,
+              'type_vetement': _typeVetement,
+              'tissu': _tissuSelectionne?.$1,
+              'prix_total': prixTotal,
+              'statut': 'attente',
+              'date_livraison_prevue': _dateLivraison!
+                  .toIso8601String()
+                  .split('T')
+                  .first,
+            },
+          );
+
+      // Si un acompte est saisi dès la création, on l'enregistre directement.
+      if (acompte > 0) {
+        await pb
+            .collection('paiements')
+            .create(
+              body: {
+                'commande': commande.id,
+                'montant': acompte,
+                'mode':
+                    'especes', // à remplacer par le mode réellement choisi si ajouté au formulaire
+              },
+            );
+      }
+
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      setState(() => _erreur = 'Une erreur est survenue : $e');
+    } finally {
+      if (mounted) setState(() => _envoiEnCours = false);
+    }
   }
 
   Future<void> _choisirDate() async {
@@ -70,20 +121,6 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
     );
     if (date != null) setState(() => _dateLivraison = date);
   }
-
-  InputDecoration get _decoration => InputDecoration(
-    filled: true,
-    fillColor: Colors.white,
-    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-    border: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
-      borderSide: const BorderSide(color: KColors.cardBorder),
-    ),
-    enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
-      borderSide: const BorderSide(color: KColors.cardBorder),
-    ),
-  );
 
   @override
   Widget build(BuildContext context) {
@@ -98,37 +135,7 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
           bottom: false,
           child: CustomScrollView(
             slivers: [
-              SliverToBoxAdapter(
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-                  decoration: const BoxDecoration(
-                    color: KColors.indigo,
-                    borderRadius: BorderRadius.vertical(
-                      bottom: Radius.circular(20),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      IconButton(
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        onPressed: () => Navigator.pop(context),
-                        icon: Icon(Icons.arrow_back, color: KColors.brassLight),
-                      ),
-                      const SizedBox(height: 10),
-                      const Text(
-                        'Nouvelle commande',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+              SliverToBoxAdapter(child: _buildHeader(context)),
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
                 sliver: SliverList.list(
@@ -154,10 +161,28 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
+                    if (_erreur != null) ...[
+                      Text(
+                        _erreur!,
+                        style: const TextStyle(
+                          color: KColors.terracotta,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                    ],
                     ElevatedButton(
-                      onPressed: _creerCommande,
-                      child: const Text('Créer la commande'),
+                      onPressed: _envoiEnCours ? null : _creerCommande,
+                      child: _envoiEnCours
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text('Créer la commande'),
                     ),
                     const SizedBox(height: 24),
                   ],
@@ -166,15 +191,36 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
             ],
           ),
         ),
-        bottomNavigationBar: SafeArea(
-          top: false,
-          child: KuturaBottomNav(
-            currentIndex: 2, // "Commandes"
-            onTap: (i) {
-              if (i == 0) Navigator.pushReplacementNamed(context, '/accueil');
-            },
+      ),
+    );
+  }
+
+  Widget _buildHeader(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+      decoration: const BoxDecoration(
+        color: KColors.indigo,
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            onPressed: () => Navigator.pop(context),
+            icon: Icon(Icons.arrow_back, color: KColors.brassLight),
           ),
-        ),
+          const SizedBox(height: 10),
+          const Text(
+            'Nouvelle commande',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -201,13 +247,45 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
     );
   }
 
+  InputDecoration get _decoration => InputDecoration(
+    filled: true,
+    fillColor: Colors.white,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: KColors.cardBorder),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: KColors.cardBorder),
+    ),
+  );
+
   Widget _buildClientField() {
     return InkWell(
       onTap: () async {
+        final atelier = await atelierService.atelierCourant();
+        final records = await pb
+            .collection('clients')
+            .getFullList(filter: 'atelier = "${atelier.id}"', sort: 'nom');
+        final clients = records.map((r) => ClientModel.fromRecord(r)).toList();
+        if (!mounted) return;
+
+        if (clients.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Aucun client — ajoutes-en un depuis l\'onglet Clients',
+              ),
+            ),
+          );
+          return;
+        }
+
         final choix = await showModalBottomSheet<ClientModel>(
           context: context,
           builder: (_) => ListView(
-            children: MockData.clients
+            children: clients
                 .map(
                   (c) => ListTile(
                     title: Text(c.nom),

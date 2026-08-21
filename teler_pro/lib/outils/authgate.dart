@@ -5,8 +5,6 @@ import 'package:teler_pro/pages/chargement.dart';
 import 'package:teler_pro/pages/connexion/connexion.dart';
 import 'package:teler_pro/pages/mainshell.dart';
 
-import 'package:flutter/material.dart';
-
 enum _EtatAuth { chargement, connecte, deconnecte }
 
 class AuthGate extends StatefulWidget {

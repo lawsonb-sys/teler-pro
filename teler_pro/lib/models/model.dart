@@ -155,7 +155,12 @@ class PaiementModel {
     mode: m['mode'] as String,
     createdAt: DateTime.parse(m['created_at'] as String),
   );
-
+  factory PaiementModel.fromRecord(RecordModel r) => PaiementModel(
+    id: r.id,
+    montant: (r.data['montant'] as num).toDouble(),
+    mode: r.getStringValue('mode'),
+    createdAt: DateTime.parse(r.getStringValue('created')),
+  );
   String get modeLabel => switch (mode) {
     'tmoney' => 'T-Money',
     'flooz' => 'Flooz',

@@ -53,8 +53,12 @@ class _FicheClientPageState extends State<FicheClientPage> {
   }
 
   Future<void> _rafraichir() async {
-    setState(() => _future = _charger());
-    await _future;
+    final data = _charger();
+    setState(() {
+      _future = data;
+    });
+
+    await data;
   }
 
   @override
