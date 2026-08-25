@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:teler_pro/models/pocketbase.dart';
+import 'package:teler_pro/controlers/client_ctr.dart';
 import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/outils/themes.dart';
 
 class NouveauClientPage extends StatefulWidget {
-  const NouveauClientPage({super.key});
+  final ClientsController controller;
+  const NouveauClientPage({super.key, required this.controller});
 
   @override
   State<NouveauClientPage> createState() => _NouveauClientPageState();
@@ -30,22 +31,13 @@ class _NouveauClientPageState extends State<NouveauClientPage> {
 
     try {
       final atelier = await atelierService.atelierCourant();
-      await pb
-          .collection('clients')
-          .create(
-            body: {
-              'atelier': atelier.id,
-              'nom': _nomCtrl.text.trim(),
-              'telephone': _telephoneCtrl.text.trim(),
-              'notes': _notesCtrl.text.trim(),
-            },
-          );
-      if (mounted) {
-        Navigator.pop(
-          context,
-          true,
-        ); // true = signale à ClientsPage de rafraîchir
-      }
+      await widget.controller.ajouter({
+        'atelier': atelier.id,
+        'nom': _nomCtrl.text.trim(),
+        'telephone': _telephoneCtrl.text.trim(),
+        'notes': _notesCtrl.text.trim(),
+      });
+      if (mounted) Navigator.pop(context);
     } catch (e) {
       setState(() => _erreur = 'Une erreur est survenue : $e');
     } finally {
@@ -77,10 +69,7 @@ class _NouveauClientPageState extends State<NouveauClientPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextField(
-              controller: _nomCtrl,
-              decoration: _decoration('Nom et prénom'),
-            ),
+            TextField(controller: _nomCtrl, decoration: _decoration('Nom')),
             const SizedBox(height: 12),
             TextField(
               controller: _telephoneCtrl,

@@ -15,6 +15,7 @@ class AuthService {
     required String email,
     required String motDePasse,
     required String nomAtelier,
+    required String nom,
   }) async {
     // 1. Créer le compte utilisateur.
     await pb
@@ -25,6 +26,7 @@ class AuthService {
             'password': motDePasse,
             'passwordConfirm': motDePasse,
             'nom_atelier': nomAtelier,
+            'name': nom,
           },
         );
     // 2. Se connecter directement après inscription.

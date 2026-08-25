@@ -1,165 +1,199 @@
 import 'package:flutter/material.dart';
+import 'package:teler_pro/controlers/client_ctr.dart';
 import 'package:teler_pro/models/model.dart';
 import 'package:teler_pro/models/pocketbase.dart';
-import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/outils/themes.dart';
 import 'package:teler_pro/pages/clients/ficheclients.dart';
 import 'package:teler_pro/pages/clients/nvclpage.dart';
 
-class ClientsPages extends StatefulWidget {
-  const ClientsPages({super.key});
+class ClientsPage extends StatefulWidget {
+  const ClientsPage({super.key});
 
   @override
-  State<ClientsPages> createState() => _ClientsPagesState();
+  State<ClientsPage> createState() => _ClientsPageState();
 }
 
-class _ClientsPagesState extends State<ClientsPages> {
-  late Future<List<ClientModel>> _future;
-  int _nombreCommandes = 0;
+class _ClientsPageState extends State<ClientsPage> {
+  final _controller = ClientsController()..charger();
+
   @override
-  void initState() {
-    super.initState();
-    _future = _charger();
-  }
-
-  Future<List<ClientModel>> _charger() async {
-    final atelier = await atelierService.atelierCourant();
-    final records = await pb
-        .collection('clients')
-        .getFullList(filter: 'atelier = "${atelier.id}"', sort: 'nom');
-    return records.map((r) => ClientModel.fromMap(r.data)).toList();
-  }
-
-  Future<void> _nombrecmd(String clientId) async {
-    final commandesRecords = await pb
-        .collection('commandes')
-        .getFullList(filter: 'client = "$clientId"', sort: '-created');
-    final commandes = commandesRecords
-        .map((r) => CommandeModel.fromRecord(r))
-        .toList();
-    _nombreCommandes = commandes.length;
-  }
-
-  Future<void> _rafraichir() async {
-    setState(() => _future = _charger());
-    await _future;
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Clients')),
-      body: FutureBuilder<List<ClientModel>>(
-        future: _future,
-        builder: (context, snap) {
-          if (snap.hasError) {
-            return Center(
-              child: Text(
-                'Erreur : ${snap.error}',
-                style: const TextStyle(color: KColors.terracotta),
-              ),
-            );
-          }
-          if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final clients = snap.data!;
+      body: ListenableBuilder(
+        listenable: _controller,
+        builder: (context, _) => _buildCorps(),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => NouveauClientPage(controller: _controller),
+          ),
+        ),
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
 
-          return RefreshIndicator(
-            onRefresh: _rafraichir,
-            child: clients.isEmpty
-                ? ListView(
-                    // ListView (même avec 1 seul enfant) au lieu de Center :
-                    // RefreshIndicator a besoin d'un widget défilable pour
-                    // détecter le geste "tirer vers le bas", même à vide.
-                    children: [
-                      SizedBox(
-                        height: MediaQuery.of(context).size.height * 0.6,
-                        child: Center(
-                          child: Text(
-                            'Aucun client pour l\'instant\nAppuie sur + pour en ajouter un',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: KColors.muted,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  )
-                : ListView.builder(
-                    itemCount: clients.length,
-                    itemBuilder: (context, i) {
-                      final client = clients[i];
-                      _nombrecmd(client.id);
-                      return Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: Material(
-                          color: Colors.white,
-                          elevation: 1.0,
-                          borderRadius: BorderRadius.circular(8),
-                          clipBehavior: Clip.antiAlias,
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(
-                              vertical: 4,
-                              horizontal: 8,
-                            ),
+  Widget _buildCorps() {
+    if (_controller.erreur != null) {
+      return Center(
+        child: Text(
+          _controller.erreur!,
+          style: const TextStyle(color: KColors.terracotta),
+        ),
+      );
+    }
+    if (_controller.chargement && _controller.clients.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-                            child: ListTile(
-                              leading: CircleAvatar(
-                                backgroundColor: KColors.indigo,
-                                child: Text(
-                                  client.nom.isNotEmpty ? client.nom[0] : '?',
-                                  style: const TextStyle(color: Colors.white),
-                                ),
-                              ),
-                              title: Text(
-                                client.nom,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              subtitle: Text(
-                                client.telephone ?? '',
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  color: KColors.muted,
-                                ),
-                              ),
-                              trailing: CircleAvatar(
-                                backgroundColor: KColors.indigo,
-                                child: Text(
-                                  '$_nombreCommandes',
-                                  style: const TextStyle(color: Colors.white),
-                                ),
-                              ),
-                              onTap: () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      FicheClientPage(clientId: client.id),
-                                ),
-                              ),
-                            ),
+    final clients = _controller.clients;
+    return RefreshIndicator(
+      onRefresh: _controller.charger,
+      child: clients.isEmpty
+          ? ListView(
+              children: [
+                SizedBox(
+                  height: MediaQuery.of(context).size.height * 0.6,
+                  child: const Center(
+                    child: Text(
+                      'Aucun client pour l\'instant\nAppuie sur + pour en ajouter un',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: KColors.muted, fontSize: 13),
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : ListView.builder(
+              itemCount: clients.length,
+              itemBuilder: (context, i) {
+                final client = clients[i];
+                return _ClientTile(
+                  client: client,
+                  onTap: () async {
+                    if (client.enAttente) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Ce client sera synchronisé dès que la connexion revient',
                           ),
                         ),
                       );
-                    },
-                  ),
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          final cree = await Navigator.push<bool>(
-            context,
-            MaterialPageRoute(builder: (_) => const NouveauClientPage()),
-          );
-          if (cree == true) _rafraichir();
-        },
-        child: const Icon(Icons.add),
+                      return;
+                    }
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => FicheClientPage(clientId: client.id),
+                      ),
+                    );
+                    _controller.charger();
+                  },
+                );
+              },
+            ),
+    );
+  }
+}
+
+// Widget séparé pour gérer le comptage des commandes par client
+class _ClientTile extends StatelessWidget {
+  final ClientModel client;
+  final VoidCallback onTap;
+
+  const _ClientTile({required this.client, required this.onTap});
+
+  Future<int> _getNombreCommandes(String clientId) async {
+    final records = await pb
+        .collection('commandes')
+        .getFullList(filter: 'client = "$clientId"');
+    return records.length;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 8),
+      elevation: 0,
+      color: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        onTap: onTap,
+        leading: CircleAvatar(
+          backgroundColor: client.enAttente ? KColors.muted : KColors.indigo,
+          child: Text(
+            client.nom.isNotEmpty ? client.nom[0].toUpperCase() : '?',
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        title: Text(
+          client.nom,
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          client.telephone ?? '',
+          style: const TextStyle(fontSize: 12, color: KColors.muted),
+        ),
+        trailing: client.enAttente
+            ? Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFE1C6),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.cloud_off, size: 12, color: Color(0xFF8A6A1F)),
+                    SizedBox(width: 4),
+                    Text(
+                      'En attente',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Color(0xFF8A6A1F),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            : FutureBuilder<int>(
+                future: _getNombreCommandes(client.id),
+                builder: (context, snapshot) {
+                  final count = snapshot.data ?? 0;
+                  return Container(
+                    width: 28,
+                    height: 28,
+                    decoration: const BoxDecoration(
+                      color: KColors.indigo,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Center(
+                      child: Text(
+                        '$count',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
       ),
     );
   }

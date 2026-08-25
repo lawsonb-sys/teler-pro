@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:teler_pro/controlers/commande_ctr.dart';
 import 'package:teler_pro/models/model.dart';
-import 'package:teler_pro/models/pocketbase.dart';
-import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/outils/themes.dart';
 import 'package:teler_pro/pages/paimentcmd.dart';
 
@@ -15,8 +14,8 @@ class CommandesPage extends StatefulWidget {
 
 class _CommandesPageState extends State<CommandesPage> {
   String _filtre = 'toutes';
-  late Future<List<CommandeModel>> _future;
 
+  final _controller = CommandesController()..charger();
   final _filtres = const [
     ('toutes', 'Toutes'),
     ('attente', 'En attente'),
@@ -24,138 +23,96 @@ class _CommandesPageState extends State<CommandesPage> {
     ('pret', 'Prêtes'),
     ('livre', 'Livrées'),
   ];
-
   @override
-  void initState() {
-    super.initState();
-    _future = _charger();
-  }
-
-  Future<List<CommandeModel>> _charger() async {
-    final atelier = await atelierService.atelierCourant();
-
-    // Filtre construit dynamiquement : toujours restreint à l'atelier courant,
-    // et en plus au statut sélectionné si ce n'est pas "toutes".
-    var filtre = 'atelier = "${atelier.id}"';
-    if (_filtre != 'toutes') {
-      filtre += ' && statut = "$_filtre"';
-    }
-
-    final records = await pb
-        .collection('commandes')
-        .getFullList(
-          filter: filtre,
-          sort: 'date_livraison_prevue',
-          expand: 'client',
-        );
-
-    final commandes = <CommandeModel>[];
-    for (final r in records) {
-      final paiements = await pb
-          .collection('paiements')
-          .getFullList(filter: 'commande = "${r.id}"');
-      final montantPaye = paiements.fold<double>(
-        0,
-        (s, p) => s + (p.data['montant'] as num).toDouble(),
-      );
-      commandes.add(CommandeModel.fromRecord(r, montantPaye: montantPaye));
-    }
-    return commandes;
-  }
-
-  void _appliquerFiltre(String f) {
-    setState(() {
-      _filtre = f;
-      _future = _charger();
-    });
-  }
-
-  Future<void> _rafraichir() async {
-    setState(() => _future = _charger());
-    await _future;
+  dispose() {
+    super.dispose();
+    _controller.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Commandes')),
-      body: Column(
-        children: [
-          SizedBox(
-            height: 44,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              children: _filtres.map((f) {
-                final (value, label) = f;
-                final actif = _filtre == value;
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(label),
-                    selected: actif,
-                    onSelected: (_) => _appliquerFiltre(value),
-                    selectedColor: KColors.indigo,
-                    labelStyle: TextStyle(
-                      fontSize: 11,
-                      color: actif ? Colors.white : KColors.muted,
-                    ),
-                    side: BorderSide(
-                      color: actif ? KColors.indigo : KColors.cardBorder,
-                    ),
-                    backgroundColor: Colors.white,
+      body: ListenableBuilder(
+        listenable: _controller,
+        builder: (BuildContext context, Widget? child) {
+          return Column(
+            children: [
+              SizedBox(
+                height: 44,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
                   ),
-                );
-              }).toList(),
-            ),
-          ),
-          Expanded(
-            child: FutureBuilder<List<CommandeModel>>(
-              future: _future,
-              builder: (context, snap) {
-                if (snap.hasError) {
-                  return Center(
-                    child: Text(
-                      'Erreur : ${snap.error}',
-                      style: const TextStyle(color: KColors.terracotta),
-                    ),
-                  );
-                }
-                if (!snap.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                final commandes = snap.data!;
-                // RefreshIndicator enveloppe TOUJOURS un widget défilable,
-                // même l'état vide — sinon le tirer-actualiser ne répond pas
-                // (le bug qu'on avait eu sur ClientsPage).
-                return RefreshIndicator(
-                  onRefresh: _rafraichir,
-                  child: commandes.isEmpty
-                      ? ListView(
-                          children: [
-                            SizedBox(
-                              height: MediaQuery.of(context).size.height * 0.6,
-                              child: Center(
-                                child: Text(
-                                  'Aucune commande',
-                                  style: TextStyle(color: KColors.muted),
-                                ),
-                              ),
-                            ),
-                          ],
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.only(bottom: 16),
-                          itemCount: commandes.length,
-                          itemBuilder: (context, i) =>
-                              _CommandeCard(commande: commandes[i]),
+                  children: _filtres.map((f) {
+                    final (value, label) = f;
+                    final actif = _filtre == value;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(label),
+                        selected: actif,
+                        onSelected: (_) => _controller.changerFiltre(value),
+                        selectedColor: KColors.indigo,
+                        labelStyle: TextStyle(
+                          fontSize: 11,
+                          color: actif ? Colors.white : KColors.muted,
                         ),
-                );
-              },
-            ),
-          ),
-        ],
+                        side: BorderSide(
+                          color: actif ? KColors.indigo : KColors.cardBorder,
+                        ),
+                        backgroundColor: Colors.white,
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+              Expanded(child: _buildCorps()),
+            ],
+          );
+        },
       ),
+    );
+  }
+
+  Widget _buildCorps() {
+    if (_controller.erreur != null) {
+      return Center(
+        child: Text(
+          _controller.erreur!,
+          style: const TextStyle(color: KColors.terracotta),
+        ),
+      );
+    }
+    if (_controller.chargement && _controller.commandes.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final commandes = _controller.commandes;
+    return RefreshIndicator(
+      onRefresh: _controller.charger,
+      child: commandes.isEmpty
+          ? ListView(
+              children: [
+                SizedBox(
+                  height: MediaQuery.of(context).size.height * 0.6,
+                  child: Center(
+                    child: Text(
+                      'Aucune commande',
+                      style: TextStyle(color: KColors.muted),
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.only(bottom: 16),
+              itemCount: commandes.length,
+              itemBuilder: (context, i) =>
+                  _CommandeCard(commande: commandes[i]),
+            ),
     );
   }
 }

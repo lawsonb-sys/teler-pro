@@ -25,7 +25,7 @@ class _MainShellState extends State<MainShell> {
   // les filtres sélectionnés etc. sont conservés quand on revient sur un onglet.
   final _pages = const [
     AccueilPage(),
-    ClientsPages(),
+    ClientsPage(),
     CommandesPage(),
     ProfilPage(),
   ];

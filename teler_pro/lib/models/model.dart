@@ -1,11 +1,19 @@
 import 'package:pocketbase/pocketbase.dart';
+import 'package:teler_pro/outils/mesure_template.dart';
 
 class ClientModel {
   final String id;
   final String nom;
   final String? telephone;
+  final bool
+  enAttente; // true si créé hors-ligne, pas encore synchronisé avec le serveur
 
-  ClientModel({required this.id, required this.nom, this.telephone});
+  ClientModel({
+    required this.id,
+    required this.nom,
+    this.telephone,
+    this.enAttente = false,
+  });
 
   factory ClientModel.fromMap(Map<String, dynamic> m) => ClientModel(
     id: m['id'] as String,
@@ -17,60 +25,62 @@ class ClientModel {
     id: r.id,
     nom: r.getStringValue('nom'),
     telephone: r.data['telephone'] as String?,
+    // Un enregistrement lu directement depuis PocketBase est par
+    // définition déjà synchronisé.
+    enAttente: false,
+  );
+
+  /// Depuis une map brute stockée dans le cache Hive (voir OfflineRepository) —
+  /// mêmes noms de champs que PocketBase, puisqu'on stocke r.data tel quel.
+  factory ClientModel.fromCacheMap(Map<String, dynamic> m) => ClientModel(
+    id: m['id'] as String,
+    nom: m['nom'] as String? ?? '',
+    telephone: m['telephone'] as String?,
+    enAttente: m['en_attente'] as bool? ?? false,
   );
 }
 
 class MesureModel {
   final String? id; // null si pas encore de fiche enregistrée
   final String clientId;
-  final double? tourPoitrine;
-  final double? tourTaille;
-  final double? tourBassin;
-  final double? longueurRobe;
-  final double? longueurManche;
-  final double? tourBras;
+  final String
+  typeVetement; // 'chemise' | 'robe' | 'costume' | 'boubou' | 'autre'
+  final Map<String, double> valeurs; // clé technique -> valeur en cm
 
   MesureModel({
     this.id,
     required this.clientId,
-    this.tourPoitrine,
-    this.tourTaille,
-    this.tourBassin,
-    this.longueurRobe,
-    this.longueurManche,
-    this.tourBras,
+    required this.typeVetement,
+    required this.valeurs,
   });
 
-  factory MesureModel.fromMap(Map<String, dynamic> m) => MesureModel(
-    clientId: m['client_id'] as String,
-    tourPoitrine: (m['tour_poitrine'] as num?)?.toDouble(),
-    tourTaille: (m['tour_taille'] as num?)?.toDouble(),
-    tourBassin: (m['tour_bassin'] as num?)?.toDouble(),
-    longueurRobe: (m['longueur_robe'] as num?)?.toDouble(),
-    longueurManche: (m['longueur_manche'] as num?)?.toDouble(),
-    tourBras: (m['tour_bras'] as num?)?.toDouble(),
-  );
+  factory MesureModel.fromRecord(RecordModel r) {
+    final brut =
+        r.data['mesures_additionnelles'] as Map<String, dynamic>? ?? {};
+    return MesureModel(
+      id: r.id,
+      clientId: r.getStringValue('client'),
+      typeVetement: r.getStringValue('type_vetement'),
+      valeurs: brut.map(
+        (cle, valeur) => MapEntry(cle, (valeur as num).toDouble()),
+      ),
+    );
+  }
 
-  factory MesureModel.fromRecord(RecordModel r) => MesureModel(
-    id: r.id,
-    clientId: r.getStringValue('client'),
-    tourPoitrine: (r.data['tour_poitrine'] as num?)?.toDouble(),
-    tourTaille: (r.data['tour_taille'] as num?)?.toDouble(),
-    tourBassin: (r.data['tour_bassin'] as num?)?.toDouble(),
-    longueurRobe: (r.data['longueur_robe'] as num?)?.toDouble(),
-    longueurManche: (r.data['longueur_manche'] as num?)?.toDouble(),
-    tourBras: (r.data['tour_bras'] as num?)?.toDouble(),
-  );
-
-  /// Représentation en liste (label, valeur) pour affichage type "mètre-ruban".
-  List<(String, double?)> get lignes => [
-    ('Tour de poitrine', tourPoitrine),
-    ('Tour de taille', tourTaille),
-    ('Tour de bassin', tourBassin),
-    ('Longueur robe', longueurRobe),
-    ('Longueur manche', longueurManche),
-    ('Tour de bras', tourBras),
-  ];
+  /// Représentation en liste (label, valeur) pour affichage type "mètre-ruban",
+  /// dans l'ordre défini par le gabarit de ce type de vêtement — sauf pour
+  /// 'autre', qui n'a pas de gabarit fixe : on affiche directement les
+  /// champs libres tels que le tailleur les a nommés.
+  List<(String, double?)> get lignes {
+    if (typeVetement == 'autre') {
+      return valeurs.entries.map((e) => (e.key, e.value)).toList();
+    }
+    final champs = MesureTemplates.champsPour(typeVetement);
+    return champs.map((champ) {
+      final (cle, label) = champ;
+      return (label, valeurs[cle]);
+    }).toList();
+  }
 }
 
 class CommandeModel {
@@ -155,12 +165,14 @@ class PaiementModel {
     mode: m['mode'] as String,
     createdAt: DateTime.parse(m['created_at'] as String),
   );
+
   factory PaiementModel.fromRecord(RecordModel r) => PaiementModel(
     id: r.id,
     montant: (r.data['montant'] as num).toDouble(),
     mode: r.getStringValue('mode'),
     createdAt: DateTime.parse(r.getStringValue('created')),
   );
+
   String get modeLabel => switch (mode) {
     'tmoney' => 'T-Money',
     'flooz' => 'Flooz',
