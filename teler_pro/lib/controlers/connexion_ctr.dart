@@ -29,6 +29,8 @@ class ConnexionControloler extends ChangeNotifier {
     String motDePasse,
     String nomAtelier,
     String nom,
+    String ville,
+    String telephone,
   ) async {
     envoiEnCours = true;
     erreur = null;
@@ -41,6 +43,8 @@ class ConnexionControloler extends ChangeNotifier {
         motDePasse: motDePasse,
         nomAtelier: nomAtelier,
         nom: nom,
+        telephone: telephone,
+        ville: ville,
       );
       return true; // Return true if successful
       // If successful, you can navigate to the next page or update the state

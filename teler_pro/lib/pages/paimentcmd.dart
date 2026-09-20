@@ -1,53 +1,210 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // 👈 Import Riverpod
 import 'package:intl/intl.dart';
+import 'package:pocketbase/pocketbase.dart';
+import 'package:teler_pro/controlers/commande_ctr.dart';
 import 'package:teler_pro/models/model.dart';
-import 'package:teler_pro/models/pocketbase.dart';
+import 'package:teler_pro/outils/providers.dart';
 import 'package:teler_pro/outils/themes.dart';
+import 'package:teler_pro/repo/offline_repo.dart';
 
-class PaiementCommandePage extends StatefulWidget {
+// 1. Conversion en ConsumerStatefulWidget
+class PaiementCommandePage extends ConsumerStatefulWidget {
   final String commandeId;
   const PaiementCommandePage({super.key, required this.commandeId});
 
   @override
-  State<PaiementCommandePage> createState() => _PaiementCommandePageState();
+  ConsumerState<PaiementCommandePage> createState() =>
+      _PaiementCommandePageState();
 }
 
-class _PaiementCommandePageState extends State<PaiementCommandePage> {
+class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
   final _montantCtrl = TextEditingController();
   String _modeSelectionne = 'tmoney';
   bool _envoiEnCours = false;
-
   late Future<_PaiementData> _future;
+
+  // Dépôts locaux Hive
+  final _commandesRepo = OfflineRepository('commandes');
+  final _paiementsRepo = OfflineRepository('paiements');
+  final _clientsRepo = OfflineRepository('clients');
 
   @override
   void initState() {
     super.initState();
     _future = _charger();
+    _actualiserArrierePlan();
+  }
+
+  @override
+  void dispose() {
+    _montantCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _actualiserArrierePlan() async {
+    try {
+      await _clientsRepo.actualiser();
+      await _commandesRepo.actualiser();
+      await _paiementsRepo.actualiser(
+        filter: 'commande = "${widget.commandeId}"',
+      );
+      if (mounted) {
+        setState(() => _future = _charger());
+      }
+    } catch (_) {}
   }
 
   Future<_PaiementData> _charger() async {
-    final commandeRecord = await pb
-        .collection('commandes')
-        .getOne(widget.commandeId, expand: 'client');
+    final cacheClients = await _clientsRepo.lireCache();
+    final Map<String, String> mapClients = {
+      for (var c in cacheClients)
+        c['id'].toString(): (c['nom'] ?? c['nom_client'] ?? 'Client inconnu')
+            .toString(),
+    };
 
-    final paiementsRecords = await pb
-        .collection('paiements')
-        .getFullList(
-          filter: 'commande = "${widget.commandeId}"',
-          sort: '-created',
-        );
-    final paiements = paiementsRecords
-        .map((r) => PaiementModel.fromRecord(r))
+    final cacheCommandes = await _commandesRepo.lireCache();
+    final commandeMap = cacheCommandes.firstWhere(
+      (c) => c['id'] == widget.commandeId,
+      orElse: () => {},
+    );
+
+    if (commandeMap.isEmpty) {
+      throw Exception("Commande introuvable dans le cache local.");
+    }
+
+    final commandeMapComplete = Map<String, dynamic>.from(commandeMap);
+    final clientId = commandeMapComplete['client']?.toString() ?? '';
+
+    if (!commandeMapComplete.containsKey('clientNom') ||
+        commandeMapComplete['clientNom'] == null ||
+        commandeMapComplete['clientNom'] == '—') {
+      commandeMapComplete['clientNom'] = mapClients[clientId] ?? '—';
+    }
+
+    final cachePaiements = await _paiementsRepo.lireCache();
+    final paiements = cachePaiements
+        .where((p) => p['commande'] == widget.commandeId)
+        .map((p) => PaiementModel.fromCacheMap(p))
         .toList();
 
+    paiements.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
     final montantPaye = paiements.fold<double>(0, (s, p) => s + p.montant);
-    final commande = CommandeModel.fromRecord(
-      commandeRecord,
+    final commande = CommandeModel.fromCacheMap(
+      commandeMapComplete,
       montantPaye: montantPaye,
     );
 
     return _PaiementData(commande: commande, paiements: paiements);
+  }
+
+  // 🚀 Méthode de changement de statut réactivée et optimisée
+  Future<void> _changerStatutCommande(CommandeModel commande) async {
+    final statuts = [
+      {'code': 'attente', 'label': 'En attente'},
+      {'code': 'en_cours', 'label': 'En cours'},
+      {'code': 'pret', 'label': 'Prêt à livrer'},
+      {'code': 'livre', 'label': 'Livré'},
+    ];
+
+    final nouveauStatut = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(
+                'Changer le statut',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: KColors.indigo,
+                ),
+              ),
+            ),
+            const Divider(),
+            ...statuts.map(
+              (s) => ListTile(
+                title: Text(s['label']!),
+                trailing: commande.statut.toLowerCase() == s['code']
+                    ? const Icon(Icons.check_circle, color: KColors.indigo)
+                    : null,
+                onTap: () => Navigator.pop(ctx, s['code']),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (nouveauStatut != null && nouveauStatut != commande.statut) {
+      try {
+        await _commandesRepo.modifier(commande.id, {'statut': nouveauStatut});
+
+        // 💡 Utilisation de ref.read pour notifier l'ensemble de l'appli
+        final ctr = ref.read(commandesControllerProvider);
+        final index = ctr.commandes.indexWhere((c) => c.id == commande.id);
+        if (index != -1) {
+          ctr.commandes[index] = ctr.commandes[index].copyWith(
+            statut: nouveauStatut,
+          );
+          ctr.notifyListeners(); // Rafraîchit aussi les autres pages à l'écoute !
+        }
+
+        // Mise à jour de l'affichage local instantanément
+        final dataActuelle = await _future;
+        final commandeModifiee = CommandeModel(
+          id: dataActuelle.commande.id,
+          clientId: dataActuelle.commande.clientId,
+          clientNom: dataActuelle.commande.clientNom,
+          typeVetement: dataActuelle.commande.typeVetement,
+          tissu: dataActuelle.commande.tissu,
+          prixTotal: dataActuelle.commande.prixTotal,
+          statut: nouveauStatut,
+          dateLivraisonPrevue: dataActuelle.commande.dateLivraisonPrevue,
+          montantPaye: dataActuelle.commande.montantPaye,
+          enAttente: dataActuelle.commande.enAttente,
+        );
+
+        setState(() {
+          _future = Future.value(
+            _PaiementData(
+              commande: commandeModifiee,
+              paiements: dataActuelle.paiements,
+            ),
+          );
+        });
+
+        _actualiserArrierePlan();
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Statut mis à jour : $nouveauStatut'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Erreur : $e'),
+              backgroundColor: KColors.terracotta,
+            ),
+          );
+        }
+      }
+    }
   }
 
   Future<void> _enregistrerPaiement() async {
@@ -60,19 +217,23 @@ class _PaiementCommandePageState extends State<PaiementCommandePage> {
     }
 
     setState(() => _envoiEnCours = true);
+
     try {
-      await pb
-          .collection('paiements')
-          .create(
-            body: {
-              'commande': widget.commandeId,
-              'montant': montant,
-              'mode': _modeSelectionne,
-            },
-          );
+      await _paiementsRepo.creer({
+        'commande': widget.commandeId,
+        'montant': montant,
+        'mode': _modeSelectionne,
+      });
+
       _montantCtrl.clear();
+      FocusScope.of(context).unfocus();
       setState(() => _future = _charger());
-      await _future;
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Paiement enregistré avec succès')),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -86,6 +247,9 @@ class _PaiementCommandePageState extends State<PaiementCommandePage> {
 
   @override
   Widget build(BuildContext context) {
+    // 💡 Écoute de Riverpod
+    ref.watch(commandesControllerProvider);
+
     final fmt = NumberFormat.decimalPattern('fr');
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -120,7 +284,7 @@ class _PaiementCommandePageState extends State<PaiementCommandePage> {
                   SliverToBoxAdapter(child: _buildSplitBar(c, fmt)),
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
+                      padding: const EdgeInsets.fromLTRB(18, 16, 18, 4),
                       child: Text(
                         'HISTORIQUE DES PAIEMENTS',
                         style: TextStyle(
@@ -133,11 +297,16 @@ class _PaiementCommandePageState extends State<PaiementCommandePage> {
                     ),
                   ),
                   if (data.paiements.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 18),
-                      child: Text(
-                        'Aucun paiement enregistré',
-                        style: TextStyle(color: KColors.muted, fontSize: 12),
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 8,
+                        ),
+                        child: Text(
+                          'Aucun paiement enregistré',
+                          style: TextStyle(color: KColors.muted, fontSize: 12),
+                        ),
                       ),
                     )
                   else
@@ -176,7 +345,7 @@ class _PaiementCommandePageState extends State<PaiementCommandePage> {
                                 ],
                               ),
                               Text(
-                                '+${fmt.format(p.montant)}',
+                                '+${fmt.format(p.montant)} FCFA',
                                 style: const TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w700,
@@ -200,7 +369,7 @@ class _PaiementCommandePageState extends State<PaiementCommandePage> {
 
   Widget _buildHero(BuildContext context, CommandeModel c, NumberFormat fmt) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
       decoration: const BoxDecoration(
         color: KColors.indigo,
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
@@ -208,13 +377,39 @@ class _PaiementCommandePageState extends State<PaiementCommandePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-            onPressed: () => Navigator.pop(context),
-            icon: Icon(Icons.arrow_back, color: KColors.brassLight),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () => Navigator.pop(context, true),
+                icon: const Icon(Icons.arrow_back, color: KColors.brassLight),
+              ),
+              InkWell(
+                onTap: () => _changerStatutCommande(c),
+                borderRadius: BorderRadius.circular(20),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  child: Row(
+                    children: [
+                      StatutBadge(statut: c.statut),
+                      const SizedBox(width: 4),
+                      const Icon(
+                        Icons.edit,
+                        size: 14,
+                        color: KColors.brassLight,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 10),
           Text(
             '${c.clientNom} · ${c.typeVetement}',
             style: const TextStyle(fontSize: 11, color: Color(0xFFB7C2D2)),
@@ -231,7 +426,7 @@ class _PaiementCommandePageState extends State<PaiementCommandePage> {
                     color: Colors.white,
                   ),
                 ),
-                Text(
+                const Text(
                   'PRIX TOTAL DE LA COMMANDE',
                   style: TextStyle(
                     fontSize: 10,
@@ -266,12 +461,16 @@ class _PaiementCommandePageState extends State<PaiementCommandePage> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'Payé ${fmt.format(c.montantPaye)}',
+                'Payé ${fmt.format(c.montantPaye)} FCFA',
                 style: const TextStyle(fontSize: 10, color: KColors.muted),
               ),
               Text(
-                'Reste dû ${fmt.format(c.soldeDu)}',
-                style: const TextStyle(fontSize: 10, color: KColors.muted),
+                'Reste dû ${fmt.format(c.soldeDu)} FCFA',
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: KColors.terracotta,
+                ),
               ),
             ],
           ),
@@ -298,7 +497,7 @@ class _PaiementCommandePageState extends State<PaiementCommandePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          const Text(
             'ENREGISTRER UN PAIEMENT',
             style: TextStyle(
               fontSize: 10,
@@ -311,6 +510,7 @@ class _PaiementCommandePageState extends State<PaiementCommandePage> {
           TextField(
             controller: _montantCtrl,
             keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             decoration: InputDecoration(
               hintText: 'Montant reçu — FCFA',
               filled: true,

@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:pocketbase/pocketbase.dart';
 import 'package:teler_pro/models/pocketbase.dart';
 import 'package:teler_pro/outils/authservcice.dart';
 import 'package:teler_pro/pages/chargement.dart';
@@ -22,8 +24,6 @@ class _AuthGateState extends State<AuthGate> {
     super.initState();
     _verifierSession();
 
-    // Redessine cet écran à chaque connexion/déconnexion/expiration de session
-    // survenant APRÈS ce premier chargement (ex. bouton "Se déconnecter").
     authService.ecouterChangements(() {
       if (mounted) {
         setState(
@@ -35,21 +35,32 @@ class _AuthGateState extends State<AuthGate> {
     });
   }
 
-  /// Au lancement de l'app : si un token est stocké localement, on vérifie
-  /// auprès du serveur qu'il est toujours valide (pas expiré/révoqué),
-  /// plutôt que de faire confiance aveuglément au stockage local.
+  /// Vérifie la session locale d'abord (compatible hors-ligne)
+  /// puis tente de rafraîchir le token si le réseau est disponible.
   Future<void> _verifierSession() async {
+    // 1. Contrôle local : Si le token JWT stocké n'est pas/plus valide localement
     if (!pb.authStore.isValid) {
-      setState(() => _etat = _EtatAuth.deconnecte);
-      return;
-    }
-    try {
-      await pb.collection('users').authRefresh();
-      if (mounted) setState(() => _etat = _EtatAuth.connecte);
-    } catch (_) {
-      // Token expiré ou révoqué côté serveur.
       pb.authStore.clear();
       if (mounted) setState(() => _etat = _EtatAuth.deconnecte);
+      return;
+    }
+
+    // 2. L'utilisateur a un token valide en cache -> On le laisse entrer immédiatement
+    if (mounted) setState(() => _etat = _EtatAuth.connecte);
+
+    // 3. Tentative de rafraîchissement réseau en arrière-plan (sans bloquer l'UI)
+    try {
+      await pb.collection('users').authRefresh();
+    } on ClientException catch (e) {
+      // Si le serveur répond explicitement avec un code 401 ou 403 (Token révoqué ou expiré)
+      if (e.statusCode == 401 || e.statusCode == 403) {
+        pb.authStore.clear();
+        if (mounted) setState(() => _etat = _EtatAuth.deconnecte);
+      }
+      // En cas d'erreur de connexion/réseau (statusCode == 0 ou timeout),
+      // on ne fait rien : l'utilisateur conserve sa session locale.
+    } catch (_) {
+      // Autres erreurs inattendues : on ne déconnecte pas l'utilisateur s'il est hors-ligne
     }
   }
 

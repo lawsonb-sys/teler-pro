@@ -31,8 +31,9 @@ class _NouveauClientPageState extends State<NouveauClientPage> {
 
     try {
       final atelier = await atelierService.atelierCourant();
+      final atelierId = atelier['id'] as String;
       await widget.controller.ajouter({
-        'atelier': atelier.id,
+        'atelier': atelierId,
         'nom': _nomCtrl.text.trim(),
         'telephone': _telephoneCtrl.text.trim(),
         'notes': _notesCtrl.text.trim(),

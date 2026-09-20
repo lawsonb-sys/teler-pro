@@ -46,12 +46,15 @@ class MesureModel {
   final String
   typeVetement; // 'chemise' | 'robe' | 'costume' | 'boubou' | 'autre'
   final Map<String, double> valeurs; // clé technique -> valeur en cm
+  final bool
+  enAttente; // true si créé/modifié hors-ligne, pas encore synchronisé
 
   MesureModel({
     this.id,
     required this.clientId,
     required this.typeVetement,
     required this.valeurs,
+    this.enAttente = false,
   });
 
   factory MesureModel.fromRecord(RecordModel r) {
@@ -64,6 +67,21 @@ class MesureModel {
       valeurs: brut.map(
         (cle, valeur) => MapEntry(cle, (valeur as num).toDouble()),
       ),
+      enAttente: false, // vient directement du serveur : forcément synchronisé
+    );
+  }
+
+  /// Depuis une map brute du cache Hive (voir OfflineRepository).
+  factory MesureModel.fromCacheMap(Map<String, dynamic> m) {
+    final brut = m['mesures_additionnelles'] as Map? ?? {};
+    return MesureModel(
+      id: m['id'] as String?,
+      clientId: m['client'] as String? ?? '',
+      typeVetement: m['type_vetement'] as String? ?? 'autre',
+      valeurs: brut.map(
+        (cle, valeur) => MapEntry(cle as String, (valeur as num).toDouble()),
+      ),
+      enAttente: m['en_attente'] as bool? ?? false,
     );
   }
 
@@ -93,6 +111,7 @@ class CommandeModel {
   final String statut; // attente | en_cours | pret | livre
   final DateTime? dateLivraisonPrevue;
   final double montantPaye;
+  final bool enAttente;
 
   CommandeModel({
     required this.id,
@@ -104,6 +123,7 @@ class CommandeModel {
     required this.statut,
     this.dateLivraisonPrevue,
     this.montantPaye = 0,
+    this.enAttente = false,
   });
 
   double get soldeDu => prixTotal - montantPaye;
@@ -142,25 +162,89 @@ class CommandeModel {
           ? DateTime.parse(r.data['date_livraison_prevue'] as String)
           : null,
       montantPaye: montantPaye,
+      enAttente: false,
+    );
+  }
+
+  /// Méthode pour copier et modifier un champ (statut, montantPaye, etc.)
+  CommandeModel copyWith({
+    String? id,
+    String? clientId,
+    String? clientNom,
+    String? typeVetement,
+    String? tissu,
+    double? prixTotal,
+    String? statut,
+    DateTime? dateLivraisonPrevue,
+    double? montantPaye,
+    bool? enAttente,
+  }) {
+    return CommandeModel(
+      id: id ?? this.id,
+      clientId: clientId ?? this.clientId,
+      clientNom: clientNom ?? this.clientNom,
+      typeVetement: typeVetement ?? this.typeVetement,
+      tissu: tissu ?? this.tissu,
+      prixTotal: prixTotal ?? this.prixTotal,
+      statut: statut ?? this.statut,
+      dateLivraisonPrevue: dateLivraisonPrevue ?? this.dateLivraisonPrevue,
+      montantPaye: montantPaye ?? this.montantPaye,
+      enAttente: enAttente ?? this.enAttente,
+    );
+  }
+
+  /// Depuis une map brute du cache Hive. Le nom du client doit avoir été
+  /// ajouté au cache via le paramètre "enrichir" de OfflineRepository.actualiser()
+  /// (voir CommandesController), sinon on retombe sur son ID.
+  factory CommandeModel.fromCacheMap(
+    Map<String, dynamic> m, {
+    double montantPaye = 0,
+  }) {
+    return CommandeModel(
+      id: m['id'] as String? ?? '',
+      clientId: m['client'] as String? ?? '',
+      // 1. On cherche 'clientNom' (injecté par le controller) PUIS 'client_nom' PUIS 'nom'
+      clientNom:
+          m['clientNom'] as String? ??
+          m['client_nom'] as String? ??
+          m['nom'] as String? ??
+          '—',
+      typeVetement:
+          m['type_vetement'] as String? ?? m['typeVetement'] as String? ?? '',
+      tissu: m['tissu'] as String?,
+      prixTotal: (m['prix_total'] ?? m['prixTotal'] as num?)?.toDouble() ?? 0,
+      // 2. On s'assure de nettoyer le statut pour éviter tout mismatch de casse
+      statut: (m['statut'] as String? ?? 'attente').trim().toLowerCase(),
+      dateLivraisonPrevue:
+          (m['date_livraison_prevue'] as String?)?.isNotEmpty == true
+          ? DateTime.tryParse(m['date_livraison_prevue'] as String)
+          : null,
+      montantPaye: montantPaye,
+      enAttente: m['en_attente'] as bool? ?? false,
     );
   }
 }
 
 class PaiementModel {
   final String id;
+  final String commandeId;
   final double montant;
   final String mode; // tmoney | flooz | moov | especes
   final DateTime createdAt;
+  final bool enAttente;
 
   PaiementModel({
     required this.id,
+    required this.commandeId,
     required this.montant,
     required this.mode,
     required this.createdAt,
+    this.enAttente = false,
   });
 
   factory PaiementModel.fromMap(Map<String, dynamic> m) => PaiementModel(
     id: m['id'] as String,
+    commandeId: m['commande_id'] as String? ?? '',
     montant: (m['montant'] as num).toDouble(),
     mode: m['mode'] as String,
     createdAt: DateTime.parse(m['created_at'] as String),
@@ -168,9 +252,25 @@ class PaiementModel {
 
   factory PaiementModel.fromRecord(RecordModel r) => PaiementModel(
     id: r.id,
+    commandeId: r.getStringValue('commande'),
     montant: (r.data['montant'] as num).toDouble(),
     mode: r.getStringValue('mode'),
     createdAt: DateTime.parse(r.getStringValue('created')),
+    enAttente: false,
+  );
+
+  /// Depuis une map brute du cache Hive. Pas de vraie date "created" tant
+  /// que ce n'est pas encore synchronisé : on utilise "maintenant" comme
+  /// approximation raisonnable pour l'affichage.
+  factory PaiementModel.fromCacheMap(Map<String, dynamic> m) => PaiementModel(
+    id: m['id'] as String,
+    commandeId: m['commande'] as String? ?? '',
+    montant: (m['montant'] as num?)?.toDouble() ?? 0,
+    mode: m['mode'] as String? ?? 'especes',
+    createdAt: m['created'] != null
+        ? DateTime.parse(m['created'] as String)
+        : DateTime.now(),
+    enAttente: m['en_attente'] as bool? ?? false,
   );
 
   String get modeLabel => switch (mode) {

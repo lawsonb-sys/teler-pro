@@ -1,12 +1,13 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:teler_pro/models/model.dart';
-import 'package:teler_pro/models/pocketbase.dart';
 import 'package:teler_pro/outils/mesure_template.dart';
 import 'package:teler_pro/outils/themes.dart';
 import 'package:teler_pro/pages/clients/mesureform.dart';
 import 'package:teler_pro/pages/commandes/nvcommande.dart';
 import 'package:teler_pro/pages/paimentcmd.dart';
+import 'package:teler_pro/repo/offline_repo.dart';
 
 class FicheClientPage extends StatefulWidget {
   final String clientId;
@@ -19,38 +20,54 @@ class FicheClientPage extends StatefulWidget {
 class _FicheClientPageState extends State<FicheClientPage> {
   late Future<_FicheData> _future;
 
+  final _clientsRepo = OfflineRepository('clients');
+  final _commandesRepo = OfflineRepository('commandes');
+  final _mesuresRepo = OfflineRepository('mesures');
+
   @override
   void initState() {
     super.initState();
     _future = _charger();
+    _actualiserArrierePlan();
+  }
+
+  Future<void> _actualiserArrierePlan() async {
+    try {
+      await _clientsRepo.actualiser();
+      await _commandesRepo.actualiser(filter: 'client = "${widget.clientId}"');
+      await _mesuresRepo.actualiser(filter: 'client = "${widget.clientId}"');
+    } catch (_) {}
   }
 
   Future<_FicheData> _charger() async {
-    final clientRecord = await pb.collection('clients').getOne(widget.clientId);
-    final client = ClientModel.fromRecord(clientRecord);
+    // 1. Lire le client dans Hive local
+    final cacheClients = await _clientsRepo.lireCache();
+    final clientMap = cacheClients.firstWhere(
+      (c) => c['id'] == widget.clientId,
+      orElse: () => {},
+    );
 
-    final mesuresRecords = await pb
-        .collection('mesures')
-        .getFullList(filter: 'client = "${widget.clientId}"');
-    final mesures = mesuresRecords
-        .map((r) => MesureModel.fromRecord(r))
+    if (clientMap.isEmpty) {
+      throw Exception("Client introuvable dans le cache local.");
+    }
+    final client = ClientModel.fromCacheMap(clientMap);
+
+    // 2. Lire les commandes du client dans Hive local
+    final cacheCommandes = await _commandesRepo.lireCache();
+    final commandes = cacheCommandes
+        .where((c) => c['client'] == widget.clientId)
+        .map((c) => CommandeModel.fromCacheMap(c))
         .toList();
 
-    final commandesRecords = await pb
-        .collection('commandes')
-        .getFullList(filter: 'client = "${widget.clientId}"', sort: '-created');
-    final commandes = commandesRecords
-        .map((r) => CommandeModel.fromRecord(r))
-        .toList();
-
-    return _FicheData(client: client, mesures: mesures, commandes: commandes);
+    return _FicheData(client: client, commandes: commandes);
   }
 
-  Future<void> _rafraichir() async {
+  /// Recharge la fiche client locale et en arrière-plan
+  Future<void> _rafraichirPage() async {
     setState(() {
       _future = _charger();
     });
-    await _future;
+    await _actualiserArrierePlan();
   }
 
   @override
@@ -79,8 +96,9 @@ class _FicheClientPageState extends State<FicheClientPage> {
                 return const Center(child: CircularProgressIndicator());
               }
               final data = snap.data!;
+
               return RefreshIndicator(
-                onRefresh: _rafraichir,
+                onRefresh: _rafraichirPage,
                 child: CustomScrollView(
                   slivers: [
                     SliverToBoxAdapter(
@@ -90,12 +108,27 @@ class _FicheClientPageState extends State<FicheClientPage> {
                         data.commandes.length,
                       ),
                     ),
+
+                    // SECTION MESURES
                     SliverToBoxAdapter(
-                      child: _buildMesuresSection(context, data.mesures),
+                      child: StreamBuilder<List<Map<String, dynamic>>>(
+                        stream: _mesuresRepo.ecouterCache(),
+                        builder: (context, snapshot) {
+                          final toutesLesMesures = snapshot.data ?? [];
+                          final mesuresClient = toutesLesMesures
+                              .where((m) => m['client'] == widget.clientId)
+                              .map((m) => MesureModel.fromCacheMap(m))
+                              .toList();
+
+                          return _buildMesuresSection(context, mesuresClient);
+                        },
+                      ),
                     ),
-                    const SliverToBoxAdapter(
+
+                    // HISTORIQUE COMMANDES
+                    SliverToBoxAdapter(
                       child: Padding(
-                        padding: EdgeInsets.fromLTRB(18, 20, 18, 8),
+                        padding: const EdgeInsets.fromLTRB(18, 20, 18, 8),
                         child: Text(
                           'HISTORIQUE',
                           style: TextStyle(
@@ -108,9 +141,9 @@ class _FicheClientPageState extends State<FicheClientPage> {
                       ),
                     ),
                     if (data.commandes.isEmpty)
-                      const SliverToBoxAdapter(
+                      SliverToBoxAdapter(
                         child: Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 18),
+                          padding: const EdgeInsets.symmetric(horizontal: 18),
                           child: Text(
                             'Aucune commande pour ce client',
                             style: TextStyle(
@@ -146,13 +179,16 @@ class _FicheClientPageState extends State<FicheClientPage> {
                                 ),
                               ),
                               trailing: StatutBadge(statut: c.statut),
-                              onTap: () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      PaiementCommandePage(commandeId: c.id),
-                                ),
-                              ),
+                              onTap: () async {
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        PaiementCommandePage(commandeId: c.id),
+                                  ),
+                                );
+                                _rafraichirPage();
+                              },
                             ),
                           );
                         },
@@ -170,7 +206,7 @@ class _FicheClientPageState extends State<FicheClientPage> {
                                 ),
                               ),
                             );
-                            if (cree == true) _rafraichir();
+                            if (cree == true || mounted) _rafraichirPage();
                           },
                           child: const Text('Nouvelle commande'),
                         ),
@@ -186,6 +222,92 @@ class _FicheClientPageState extends State<FicheClientPage> {
     );
   }
 
+  // Boîte de dialogue de modification du client
+  void _afficherFormulaireModification(
+    BuildContext context,
+    ClientModel client,
+  ) {
+    final nomController = TextEditingController(text: client.nom);
+    final telephoneController = TextEditingController(text: client.telephone);
+    final formKey = GlobalKey<FormState>();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Modifier le client'),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: nomController,
+                decoration: const InputDecoration(
+                  labelText: 'Nom du client',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Nom obligatoire' : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: telephoneController,
+                decoration: const InputDecoration(
+                  labelText: 'Téléphone',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.phone,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: KColors.indigo,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () async {
+              if (!formKey.currentState!.validate()) return;
+
+              final donneesModifiees = {
+                'nom': nomController.text.trim(),
+                'telephone': telephoneController.text.trim(),
+              };
+
+              try {
+                // 1. Modification via le repository
+                await _clientsRepo.modifier(client.id, donneesModifiees);
+
+                if (ctx.mounted) {
+                  Navigator.pop(ctx);
+
+                  // 2. Recharge l'affichage immédiatement
+                  _rafraichirPage();
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Client modifié avec succès')),
+                  );
+                }
+              } catch (e) {
+                if (ctx.mounted) {
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text('Erreur : $e')));
+                }
+              }
+            },
+            child: const Text('Enregistrer'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildHero(BuildContext context, ClientModel client, int nbCommandes) {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 30),
@@ -193,28 +315,43 @@ class _FicheClientPageState extends State<FicheClientPage> {
         color: KColors.indigo,
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-            onPressed: () => Navigator.pop(context),
-            icon: const Icon(Icons.arrow_back, color: KColors.brassLight),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back, color: KColors.brassLight),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                client.nom,
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '$nbCommandes commande${nbCommandes > 1 ? 's' : ''}',
+                style: const TextStyle(fontSize: 11, color: Color(0xFFB7C2D2)),
+              ),
+            ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            client.nom,
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-              color: Colors.white,
+          CircleAvatar(
+            radius: 20,
+            backgroundColor: KColors.brassLight,
+            child: IconButton(
+              onPressed: () {
+                _afficherFormulaireModification(context, client);
+              },
+              icon: const Icon(Icons.edit, size: 20, color: KColors.indigo),
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '$nbCommandes commande${nbCommandes > 1 ? 's' : ''}',
-            style: const TextStyle(fontSize: 11, color: Color(0xFFB7C2D2)),
           ),
         ],
       ),
@@ -260,14 +397,50 @@ class _FicheClientPageState extends State<FicheClientPage> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  MesureTemplates.labelType[mesure.typeVetement] ??
-                      mesure.typeVetement,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: KColors.indigo,
-                  ),
+                Row(
+                  children: [
+                    Text(
+                      MesureTemplates.labelType[mesure.typeVetement] ??
+                          mesure.typeVetement,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: KColors.indigo,
+                      ),
+                    ),
+                    if (mesure.enAttente) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEFE1C6),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.cloud_off,
+                              size: 10,
+                              color: Color(0xFF8A6A1F),
+                            ),
+                            SizedBox(width: 3),
+                            Text(
+                              'En attente',
+                              style: TextStyle(
+                                fontSize: 8,
+                                color: Color(0xFF8A6A1F),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 Row(
                   mainAxisSize: MainAxisSize.min,
@@ -278,7 +451,7 @@ class _FicheClientPageState extends State<FicheClientPage> {
                       child: const Text('Modifier'),
                     ),
                     IconButton(
-                      icon: Icon(
+                      icon: const Icon(
                         Icons.delete_outline,
                         size: 20,
                         color: KColors.terracotta,
@@ -326,47 +499,6 @@ class _FicheClientPageState extends State<FicheClientPage> {
     );
   }
 
-  Future<void> _confirmerSuppression(
-    BuildContext context,
-    MesureModel mesure,
-  ) async {
-    final confirme = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Supprimer cette fiche ?'),
-        content: Text(
-          'La fiche de mesures "${MesureTemplates.labelType[mesure.typeVetement] ?? mesure.typeVetement}" sera définitivement supprimée.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Annuler'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(
-              'Supprimer',
-              style: TextStyle(color: KColors.terracotta),
-            ),
-          ),
-        ],
-      ),
-    );
-
-    if (confirme == true && mesure.id != null) {
-      try {
-        await pb.collection('mesures').delete(mesure.id!);
-        if (mounted) _rafraichir();
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Erreur : $e')));
-        }
-      }
-    }
-  }
-
   Future<void> _choisirTypeEtAjouter(
     BuildContext context,
     List<MesureModel> mesuresExistantes,
@@ -391,19 +523,16 @@ class _FicheClientPageState extends State<FicheClientPage> {
 
     final choix = await showModalBottomSheet<String>(
       context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: typesRestants
-              .map(
-                (e) => ListTile(
-                  title: Text(e.value),
-                  onTap: () => Navigator.pop(context, e.key),
-                ),
-              )
-              .toList(),
-        ),
+      builder: (_) => ListView(
+        shrinkWrap: true,
+        children: typesRestants
+            .map(
+              (e) => ListTile(
+                title: Text(e.value),
+                onTap: () => Navigator.pop(context, e.key),
+              ),
+            )
+            .toList(),
       ),
     );
     if (choix != null) {
@@ -411,32 +540,67 @@ class _FicheClientPageState extends State<FicheClientPage> {
     }
   }
 
+  Future<void> _confirmerSuppression(
+    BuildContext context,
+    MesureModel mesure,
+  ) async {
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Supprimer cette fiche ?'),
+        content: Text(
+          'La fiche de mesures "${MesureTemplates.labelType[mesure.typeVetement] ?? mesure.typeVetement}" sera définitivement supprimée.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annuler'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'Supprimer',
+              style: TextStyle(color: KColors.terracotta),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirme == true && mesure.id != null) {
+      try {
+        await _mesuresRepo.supprimer(mesure.id!);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Erreur : $e')));
+        }
+      }
+    }
+  }
+
   Future<void> _ouvrirFormulaireMesures({
     MesureModel? mesureExistante,
     String? typeVetementInitial,
   }) async {
-    final modifie = await Navigator.push<bool>(
+    await Navigator.push<bool>(
       context,
       MaterialPageRoute(
         builder: (_) => MesuresFormPage(
           clientId: widget.clientId,
+          mesuresRepo: _mesuresRepo,
           mesureExistante: mesureExistante,
           typeVetementInitial: typeVetementInitial,
         ),
       ),
     );
-    if (modifie == true && mounted) _rafraichir();
   }
 }
 
 class _FicheData {
   final ClientModel client;
-  final List<MesureModel> mesures;
   final List<CommandeModel> commandes;
 
-  _FicheData({
-    required this.client,
-    required this.mesures,
-    required this.commandes,
-  });
+  _FicheData({required this.client, required this.commandes});
 }

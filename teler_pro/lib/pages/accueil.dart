@@ -1,13 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:teler_pro/models/model.dart';
 import 'package:teler_pro/outils/accueil_ctr.dart';
-import 'package:teler_pro/outils/accueil_rapo.dart';
 import 'package:teler_pro/outils/themes.dart';
 import 'package:teler_pro/pages/commandes/nvcommande.dart';
 import 'package:teler_pro/pages/paimentcmd.dart';
 
-/// Affichée comme onglet 0 dans MainShell : pas de Scaffold racine ni de
-/// barre du bas ici, c'est le shell qui les fournit.
 class AccueilPage extends StatefulWidget {
   const AccueilPage({super.key});
 
@@ -25,13 +22,15 @@ class _AccueilPageState extends State<AccueilPage> {
     _controller.charger();
   }
 
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
   String getSalutation() {
     final hour = DateTime.now().hour;
-    if (hour >= 5 && hour < 12) {
-      return 'BONJOUR';
-    } else {
-      return 'BONSOIR';
-    }
+    return (hour >= 5 && hour < 12) ? 'BONJOUR' : 'BONSOIR';
   }
 
   @override
@@ -47,16 +46,41 @@ class _AccueilPageState extends State<AccueilPage> {
             AccueilError(:final message) => Center(
               child: Text(
                 'Erreur : $message',
-                style: TextStyle(color: KColors.terracotta),
+                style: const TextStyle(color: KColors.terracotta),
               ),
             ),
             AccueilSuccess(:final data) => RefreshIndicator(
-              onRefresh: _controller.charger,
+              onRefresh: _controller.rafraichir,
               child: CustomScrollView(
                 slivers: [
                   SliverToBoxAdapter(child: _buildHeader(data.nomAtelier)),
                   SliverToBoxAdapter(child: _buildStats(data)),
-                  // ... reste de vos slivers
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Commandes récentes :',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          if (data.commandes.isNotEmpty)
+                            Text(
+                              '${data.commandes.length} au total',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: KColors.muted,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+
                   if (data.commandes.isEmpty)
                     const SliverFillRemaining(
                       child: Center(
@@ -70,7 +94,14 @@ class _AccueilPageState extends State<AccueilPage> {
                     SliverList(
                       delegate: SliverChildBuilderDelegate((context, index) {
                         final commande = data.commandes[index];
-                        return _CommandeTile(commande: commande);
+
+                        print(
+                          'Commandes: ${commande.id}, Client: ${commande.clientNom}, Statut: ${commande.statut}',
+                        );
+                        return _CommandeTile(
+                          commande: commande,
+                          onrefresh: _controller.charger,
+                        );
                       }, childCount: data.commandes.length),
                     ),
                 ],
@@ -80,6 +111,7 @@ class _AccueilPageState extends State<AccueilPage> {
         },
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'accueil_fab',
         onPressed: () async {
           final cree = await Navigator.push<bool>(
             context,
@@ -106,7 +138,7 @@ class _AccueilPageState extends State<AccueilPage> {
         children: [
           Text(
             getSalutation(),
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 11,
               letterSpacing: 1.2,
               color: KColors.brassLight,
@@ -115,7 +147,7 @@ class _AccueilPageState extends State<AccueilPage> {
           ),
           const SizedBox(height: 4),
           Text(
-            nomAtelier,
+            'Atelier : $nomAtelier',
             style: const TextStyle(
               fontSize: 22,
               fontWeight: FontWeight.w600,
@@ -148,20 +180,6 @@ class _AccueilPageState extends State<AccueilPage> {
     );
   }
 }
-
-/*class _AccueilData {
-  final String nomAtelier;
-  final List<CommandeModel> commandes;
-  final int enCours;
-  final int pretes;
-
-  _AccueilData({
-    required this.nomAtelier,
-    required this.commandes,
-    required this.enCours,
-    required this.pretes,
-  });
-}*/
 
 class _StatCard extends StatelessWidget {
   final String num;
@@ -212,17 +230,21 @@ class _StatCard extends StatelessWidget {
 
 class _CommandeTile extends StatelessWidget {
   final CommandeModel commande;
-  const _CommandeTile({required this.commande});
+  final VoidCallback onrefresh;
+  const _CommandeTile({required this.commande, required this.onrefresh});
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => PaiementCommandePage(commandeId: commande.id),
-        ),
-      ),
+      onTap: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PaiementCommandePage(commandeId: commande.id),
+          ),
+        );
+        onrefresh();
+      },
       leading: CircleAvatar(
         backgroundColor: KColors.indigo,
         child: Text(

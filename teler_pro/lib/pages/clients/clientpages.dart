@@ -23,6 +23,12 @@ class _ClientsPageState extends State<ClientsPage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _controller.charger();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Clients')),
@@ -57,7 +63,7 @@ class _ClientsPageState extends State<ClientsPage> {
 
     final clients = _controller.clients;
     return RefreshIndicator(
-      onRefresh: _controller.charger,
+      onRefresh: _controller.rafraichir,
       child: clients.isEmpty
           ? ListView(
               children: [
@@ -80,22 +86,28 @@ class _ClientsPageState extends State<ClientsPage> {
                 return _ClientTile(
                   client: client,
                   onTap: () async {
+                    // 1. Information visuelle si le client n'est pas encore sur PocketBase
                     if (client.enAttente) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
                           content: Text(
-                            'Ce client sera synchronisé dès que la connexion revient',
+                            'Client local : sera synchronisé au retour de la connexion',
                           ),
+                          duration: Duration(seconds: 2),
                         ),
                       );
-                      return;
+                      // PAS DE RETURN ICI : la navigation continue !
                     }
+
+                    // 2. Navigation vers la fiche avec l'ID local/Hive
                     await Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (_) => FicheClientPage(clientId: client.id),
                       ),
                     );
+
+                    if (!context.mounted) return;
                     _controller.charger();
                   },
                 );

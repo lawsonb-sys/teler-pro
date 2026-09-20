@@ -29,17 +29,17 @@ class _ProfilPageState extends State<ProfilPage> {
 
   Future<_ProfilData> _charger() async {
     final atelier = await atelierService.atelierCourant();
-    _nomCtrl.text = atelier.getStringValue('nom');
-    _telephoneCtrl.text = atelier.data['telephone'] as String? ?? '';
-    _villeCtrl.text = atelier.data['ville'] as String? ?? '';
+    _nomCtrl.text = atelier['nom'] as String? ?? '';
+    _telephoneCtrl.text = atelier['telephone'] as String;
+    _villeCtrl.text = atelier['ville'] as String? ?? '';
 
     return _ProfilData(
-      nom: atelier.getStringValue('nom'),
-      statutAbonnement: atelier.getStringValue('statut_abonnement'),
-      telephone: atelier.data['telephone'] as String?,
-      ville: atelier.data['ville'] as String?,
+      nom: atelier['nom'] as String,
+      statutAbonnement: atelier['statut_abonnement'] as String,
+      telephone: atelier['telephone'] as String?,
+      ville: atelier['ville'] as String?,
       email: pb.authStore.record?.getStringValue('email') ?? '',
-      atelierId: atelier.id,
+      atelierId: atelier['id'] as String,
     );
   }
 
@@ -47,10 +47,11 @@ class _ProfilPageState extends State<ProfilPage> {
     setState(() => _envoiEnCours = true);
     try {
       final atelier = await atelierService.atelierCourant();
+      final atelierId = atelier['id'] as String;
       await pb
           .collection('ateliers')
           .update(
-            atelier.id,
+            atelierId,
             body: {
               'nom': _nomCtrl.text.trim(),
               'telephone': _telephoneCtrl.text.trim(),
@@ -228,7 +229,6 @@ class _ProfilPageState extends State<ProfilPage> {
                   const SizedBox(height: 16),
                   ElevatedButton(
                     onPressed: () {
-                      print('kolokol');
                       _ouvrirPagePaiement(data.atelierId);
                     },
                     child: const Text('S\'abonner'),

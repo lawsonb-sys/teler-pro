@@ -4,6 +4,8 @@ import 'package:teler_pro/models/model.dart';
 import 'package:teler_pro/models/pocketbase.dart';
 import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/outils/themes.dart';
+import 'package:teler_pro/repo/offline_repo.dart';
+import 'package:teler_pro/services/connectivity_service.dart';
 
 /// [clientIdPreselectionne] : passé quand on arrive depuis la fiche client,
 /// pour pré-remplir le sélecteur de client.
@@ -49,8 +51,9 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
 
   Future<void> _chargerClientPreselectionne(String clientId) async {
     final record = await pb.collection('clients').getOne(clientId);
-    if (mounted)
+    if (mounted) {
       setState(() => _clientSelectionne = ClientModel.fromRecord(record));
+    }
   }
 
   Future<void> _creerCommande() async {
@@ -68,40 +71,58 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
 
     try {
       final atelier = await atelierService.atelierCourant();
+      final atelierId = atelier['id'] as String;
       final prixTotal =
           double.tryParse(_prixCtrl.text.replaceAll(' ', '')) ?? 0;
       final acompte =
           double.tryParse(_acompteCtrl.text.replaceAll(' ', '')) ?? 0;
+      final connecte = await connectivityService.estConnecte();
 
-      final commande = await pb
-          .collection('commandes')
-          .create(
-            body: {
-              'atelier': atelier.id,
-              'client': _clientSelectionne!.id,
-              'type_vetement': _typeVetement,
-              'tissu': _tissuSelectionne?.$1,
-              'prix_total': prixTotal,
-              'statut': 'attente',
-              'date_livraison_prevue': _dateLivraison!
-                  .toIso8601String()
-                  .split('T')
-                  .first,
-            },
+      final commandeBody = {
+        'atelier': atelierId,
+        'client': _clientSelectionne!.id,
+        'type_vetement': _typeVetement,
+        'tissu': _tissuSelectionne?.$1,
+        'prix_total': prixTotal,
+        'statut': 'attente',
+        'date_livraison_prevue': _dateLivraison!
+            .toIso8601String()
+            .split('T')
+            .first,
+      };
+
+      if (connecte) {
+        // En ligne : commande ET acompte créés normalement, liés par le vrai
+        // identifiant renvoyé par le serveur.
+        final commande = await pb
+            .collection('commandes')
+            .create(body: commandeBody);
+        if (acompte > 0) {
+          await pb
+              .collection('paiements')
+              .create(
+                body: {
+                  'commande': commande.id,
+                  'montant': acompte,
+                  'mode': 'especes',
+                },
+              );
+        }
+      } else {
+        // Hors-ligne : la commande passe par le dépôt (créée dès le retour
+        // du réseau). L'acompte, lui, ne peut pas être lié de façon fiable
+        // à un identifiant qui n'existe pas encore côté serveur — on prévient
+        // le tailleur plutôt que de risquer une liaison cassée.
+        await OfflineRepository('commandes').creer(commandeBody);
+        if (acompte > 0 && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Commande enregistrée hors-ligne. Ajoute l\'acompte depuis sa fiche une fois la connexion revenue.',
+              ),
+            ),
           );
-
-      // Si un acompte est saisi dès la création, on l'enregistre directement.
-      if (acompte > 0) {
-        await pb
-            .collection('paiements')
-            .create(
-              body: {
-                'commande': commande.id,
-                'montant': acompte,
-                'mode':
-                    'especes', // à remplacer par le mode réellement choisi si ajouté au formulaire
-              },
-            );
+        }
       }
 
       if (mounted) Navigator.pop(context, true);
@@ -265,9 +286,10 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
     return InkWell(
       onTap: () async {
         final atelier = await atelierService.atelierCourant();
+        final atelierId = atelier['id'] as String;
         final records = await pb
             .collection('clients')
-            .getFullList(filter: 'atelier = "${atelier.id}"', sort: 'nom');
+            .getFullList(filter: 'atelier = "$atelierId"', sort: 'nom');
         final clients = records.map((r) => ClientModel.fromRecord(r)).toList();
         if (!mounted) return;
 
@@ -287,9 +309,17 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
           builder: (_) => ListView(
             children: clients
                 .map(
-                  (c) => ListTile(
-                    title: Text(c.nom),
-                    onTap: () => Navigator.pop(context, c),
+                  (c) => Padding(
+                    padding: const EdgeInsets.all(14.0),
+                    child: ListTile(
+                      splashColor: KColors.indigo.withValues(alpha: 0.1),
+                      shape: RoundedRectangleBorder(
+                        side: const BorderSide(color: KColors.cardBorder),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      title: Text(c.nom),
+                      onTap: () => Navigator.pop(context, c),
+                    ),
                   ),
                 )
                 .toList(),

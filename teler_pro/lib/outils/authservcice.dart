@@ -16,9 +16,11 @@ class AuthService {
     required String motDePasse,
     required String nomAtelier,
     required String nom,
+    required String telephone,
+    required String ville,
   }) async {
     // 1. Créer le compte utilisateur.
-    await pb
+    final users = await pb
         .collection('users')
         .create(
           body: {
@@ -27,6 +29,17 @@ class AuthService {
             'passwordConfirm': motDePasse,
             'nom_atelier': nomAtelier,
             'name': nom,
+          },
+        );
+    await pb
+        .collection('ateliers')
+        .create(
+          body: {
+            'iduser': users.id,
+            'nom': nomAtelier,
+            'telephone': telephone,
+            'ville': ville,
+            'statut_abonnement': 'essai',
           },
         );
     // 2. Se connecter directement après inscription.

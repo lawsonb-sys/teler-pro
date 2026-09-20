@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:teler_pro/models/model.dart';
-import 'package:teler_pro/models/pocketbase.dart';
 import 'package:teler_pro/outils/mesure_template.dart';
 import 'package:teler_pro/outils/themes.dart';
+import 'package:teler_pro/repo/offline_repo.dart';
 
 /// Une paire (nom du champ, valeur) pour le type "Autre", où le tailleur
 /// choisit lui-même ses points de mesure plutôt qu'un gabarit fixe.
@@ -23,10 +23,12 @@ class MesuresFormPage extends StatefulWidget {
   final String clientId;
   final MesureModel? mesureExistante;
   final String? typeVetementInitial;
+  final OfflineRepository mesuresRepo;
 
   const MesuresFormPage({
     super.key,
     required this.clientId,
+    required this.mesuresRepo,
     this.mesureExistante,
     this.typeVetementInitial,
   });
@@ -144,11 +146,9 @@ class _MesuresFormPageState extends State<MesuresFormPage> {
 
     try {
       if (widget.mesureExistante?.id != null) {
-        await pb
-            .collection('mesures')
-            .update(widget.mesureExistante!.id!, body: body);
+        await widget.mesuresRepo.modifier(widget.mesureExistante!.id!, body);
       } else {
-        await pb.collection('mesures').create(body: body);
+        await widget.mesuresRepo.creer(body);
       }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
