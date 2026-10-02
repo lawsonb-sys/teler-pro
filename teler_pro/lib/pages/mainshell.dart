@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:teler_pro/outils/bottomnav.dart';
 import 'package:teler_pro/pages/accueil.dart';
+
 import 'package:teler_pro/pages/clients/clientpages.dart';
 import 'package:teler_pro/pages/commandes/commandes.dart';
 import 'package:teler_pro/pages/profile.dart';
@@ -24,7 +25,8 @@ class _MainShellState extends State<MainShell> {
   // toutes en mémoire et bascule juste laquelle est visible → le scroll,
   // les filtres sélectionnés etc. sont conservés quand on revient sur un onglet.
   final _pages = const [
-    AccueilPage(),
+    // AccueilPage(),
+    AccueilScreen(),
     ClientsPage(),
     CommandesPage(),
     ProfilPage(),

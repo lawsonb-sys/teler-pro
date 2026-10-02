@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:pocketbase/pocketbase.dart';
 import 'package:teler_pro/outils/mesure_template.dart';
 
@@ -101,6 +103,7 @@ class MesureModel {
   }
 }
 
+
 class CommandeModel {
   final String id;
   final String clientId;
@@ -111,7 +114,10 @@ class CommandeModel {
   final String statut; // attente | en_cours | pret | livre
   final DateTime? dateLivraisonPrevue;
   final double montantPaye;
+  final List<String> photos; // 👈 Noms de fichiers (PB) ou chemins locaux (Hive)
   final bool enAttente;
+
+  List<File>? photosLocales;
 
   CommandeModel({
     required this.id,
@@ -123,6 +129,7 @@ class CommandeModel {
     required this.statut,
     this.dateLivraisonPrevue,
     this.montantPaye = 0,
+    this.photos = const [], // 👈 Initialisé par défaut
     this.enAttente = false,
   });
 
@@ -142,13 +149,20 @@ class CommandeModel {
         ? DateTime.parse(m['date_livraison_prevue'] as String)
         : null,
     montantPaye: (m['montant_paye'] as num?)?.toDouble() ?? 0,
+    photos: (m['photos'] as List?)?.map((e) => e.toString()).toList() ?? [],
   );
 
-  /// [montantPaye] n'est pas stocké sur "commandes" côté PocketBase (comme sur
-  /// Supabase) — il faut le calculer séparément en sommant les "paiements"
-  /// liés, puis le passer ici.
+  /// [montantPaye] n'est pas stocké sur "commandes" côté PocketBase — il faut le
+  /// calculer séparément en sommant les "paiements" liés, puis le passer ici.
   factory CommandeModel.fromRecord(RecordModel r, {double montantPaye = 0}) {
     final clientExpand = r.expand['client']?.firstOrNull;
+
+    // Récupération sécurisée de la liste des photos depuis PocketBase
+    final List<String> photosList = r
+        .getListValue<String>('photos')
+        .map((e) => e.toString())
+        .toList();
+
     return CommandeModel(
       id: r.id,
       clientId: r.getStringValue('client'),
@@ -158,15 +172,70 @@ class CommandeModel {
       prixTotal: (r.data['prix_total'] as num).toDouble(),
       statut: r.getStringValue('statut'),
       dateLivraisonPrevue:
-          (r.data['date_livraison_prevue'] as String?)?.isNotEmpty == true
+      (r.data['date_livraison_prevue'] as String?)?.isNotEmpty == true
           ? DateTime.parse(r.data['date_livraison_prevue'] as String)
           : null,
       montantPaye: montantPaye,
+      photos: photosList,
       enAttente: false,
     );
   }
 
-  /// Méthode pour copier et modifier un champ (statut, montantPaye, etc.)
+  /// Depuis une map brute du cache Hive. Le nom du client doit avoir été
+  /// ajouté au cache via le paramètre "enrichir" de OfflineRepository.actualiser()
+  /// (voir CommandesController), sinon on retombe sur son ID.
+  factory CommandeModel.fromCacheMap(
+      Map<String, dynamic> m, {
+        double montantPaye = 0,
+      }) {
+    // Décodage de la liste des photos depuis Hive
+    List<String> photosList = [];
+    if (m['photos'] != null && m['photos'] is List) {
+      photosList = (m['photos'] as List).map((e) => e.toString()).toList();
+    }
+
+    return CommandeModel(
+      id: m['id'] as String? ?? '',
+      clientId: m['client'] as String? ?? '',
+      // 1. On cherche 'clientNom' (injecté par le controller) PUIS 'client_nom' PUIS 'nom'
+      clientNom: m['clientNom'] as String? ??
+          m['client_nom'] as String? ??
+          m['nom'] as String? ??
+          '—',
+      typeVetement:
+      m['type_vetement'] as String? ?? m['typeVetement'] as String? ?? '',
+      tissu: m['tissu'] as String?,
+      prixTotal: (m['prix_total'] ?? m['prixTotal'] as num?)?.toDouble() ?? 0,
+      // 2. On s'assure de nettoyer le statut pour éviter tout mismatch de casse
+      statut: (m['statut'] as String? ?? 'attente').trim().toLowerCase(),
+      dateLivraisonPrevue:
+      (m['date_livraison_prevue'] as String?)?.isNotEmpty == true
+          ? DateTime.tryParse(m['date_livraison_prevue'] as String)
+          : null,
+      montantPaye: montantPaye,
+      photos: photosList,
+      enAttente: m['en_attente'] as bool? ?? false,
+    );
+  }
+
+  /// Convertit l'instance en Map
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'client': clientId,
+      'clientNom': clientNom,
+      'type_vetement': typeVetement,
+      'tissu': tissu,
+      'prix_total': prixTotal,
+      'statut': statut,
+      'date_livraison_prevue':
+      dateLivraisonPrevue?.toIso8601String().split('T').first,
+      'photos': photos,
+      'en_attente': enAttente,
+    };
+  }
+
+  /// Méthode pour copier et modifier un champ (statut, montantPaye, photos, etc.)
   CommandeModel copyWith({
     String? id,
     String? clientId,
@@ -177,6 +246,7 @@ class CommandeModel {
     String? statut,
     DateTime? dateLivraisonPrevue,
     double? montantPaye,
+    List<String>? photos,
     bool? enAttente,
   }) {
     return CommandeModel(
@@ -189,38 +259,8 @@ class CommandeModel {
       statut: statut ?? this.statut,
       dateLivraisonPrevue: dateLivraisonPrevue ?? this.dateLivraisonPrevue,
       montantPaye: montantPaye ?? this.montantPaye,
+      photos: photos ?? this.photos,
       enAttente: enAttente ?? this.enAttente,
-    );
-  }
-
-  /// Depuis une map brute du cache Hive. Le nom du client doit avoir été
-  /// ajouté au cache via le paramètre "enrichir" de OfflineRepository.actualiser()
-  /// (voir CommandesController), sinon on retombe sur son ID.
-  factory CommandeModel.fromCacheMap(
-    Map<String, dynamic> m, {
-    double montantPaye = 0,
-  }) {
-    return CommandeModel(
-      id: m['id'] as String? ?? '',
-      clientId: m['client'] as String? ?? '',
-      // 1. On cherche 'clientNom' (injecté par le controller) PUIS 'client_nom' PUIS 'nom'
-      clientNom:
-          m['clientNom'] as String? ??
-          m['client_nom'] as String? ??
-          m['nom'] as String? ??
-          '—',
-      typeVetement:
-          m['type_vetement'] as String? ?? m['typeVetement'] as String? ?? '',
-      tissu: m['tissu'] as String?,
-      prixTotal: (m['prix_total'] ?? m['prixTotal'] as num?)?.toDouble() ?? 0,
-      // 2. On s'assure de nettoyer le statut pour éviter tout mismatch de casse
-      statut: (m['statut'] as String? ?? 'attente').trim().toLowerCase(),
-      dateLivraisonPrevue:
-          (m['date_livraison_prevue'] as String?)?.isNotEmpty == true
-          ? DateTime.tryParse(m['date_livraison_prevue'] as String)
-          : null,
-      montantPaye: montantPaye,
-      enAttente: m['en_attente'] as bool? ?? false,
     );
   }
 }

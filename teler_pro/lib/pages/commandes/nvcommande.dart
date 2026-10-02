@@ -1,28 +1,38 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:teler_pro/controlers/command_ctr/commande_ctr.dart';
+import 'package:teler_pro/controlers/nv_commande/nv_cmd_ctr.dart';
 import 'package:teler_pro/models/model.dart';
 import 'package:teler_pro/models/pocketbase.dart';
 import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/outils/themes.dart';
-import 'package:teler_pro/repo/offline_repo.dart';
-import 'package:teler_pro/services/connectivity_service.dart';
+import 'package:teler_pro/provider/test_ctr.dart';
 
 /// [clientIdPreselectionne] : passé quand on arrive depuis la fiche client,
 /// pour pré-remplir le sélecteur de client.
-class NouvelleCommandePage extends StatefulWidget {
+class NouvelleCommandePage extends ConsumerStatefulWidget {
   final String? clientIdPreselectionne;
   const NouvelleCommandePage({super.key, this.clientIdPreselectionne});
 
   @override
-  State<NouvelleCommandePage> createState() => _NouvelleCommandePageState();
+  ConsumerState<NouvelleCommandePage> createState() =>
+      _NouvelleCommandePageState();
 }
 
-class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
+class _NouvelleCommandePageState extends ConsumerState<NouvelleCommandePage> {
   ClientModel? _clientSelectionne;
   String? _typeVetement;
   DateTime? _dateLivraison;
   final _prixCtrl = TextEditingController();
   final _acompteCtrl = TextEditingController();
+
+  // 👈 Gestion des photos
+  final List<File> _photos = [];
+  final ImagePicker _picker = ImagePicker();
+
   bool _envoiEnCours = false;
   String? _erreur;
 
@@ -45,15 +55,91 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
   void initState() {
     super.initState();
     if (widget.clientIdPreselectionne != null) {
-      _chargerClientPreselectionne(widget.clientIdPreselectionne!);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _chargerClientPreselectionne(widget.clientIdPreselectionne!);
+      });
     }
   }
 
-  Future<void> _chargerClientPreselectionne(String clientId) async {
-    final record = await pb.collection('clients').getOne(clientId);
-    if (mounted) {
-      setState(() => _clientSelectionne = ClientModel.fromRecord(record));
+  void _chargerClientPreselectionne(String clientId) async {
+    final clientState = ref.read(nouvelleCommandeControllerProvider);
+    final list = clientState.value ?? [];
+    final match = list.where((c) => c.id == clientId).firstOrNull;
+    if (match != null && mounted) {
+      setState(() => _clientSelectionne = match);
     }
+  }
+
+  @override
+  void dispose() {
+    _prixCtrl.dispose();
+    _acompteCtrl.dispose();
+    super.dispose();
+  }
+
+  /// Sélection d'une ou plusieurs photos depuis la Galerie
+  Future<void> _choisirPhotosGalerie(ImageSource gallery) async {
+    try {
+      final List<XFile> pickedFiles = await _picker.pickMultiImage(
+        imageQuality: 80, // Compression légère
+      );
+      if (pickedFiles.isNotEmpty) {
+        setState(() {
+          _photos.addAll(pickedFiles.map((xFile) => File(xFile.path)));
+        });
+      }
+    } catch (e) {
+      print('Erreur lors de la sélection des photos : $e');
+    }
+  }
+
+  /// Prise de photo unique depuis l'Appareil Photo
+  Future<void> _prendrePhotoCamera(ImageSource camera) async {
+    try {
+      final XFile? pickedFile = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 80,
+      );
+      if (pickedFile != null) {
+        setState(() {
+          _photos.add(File(pickedFile.path));
+        });
+      }
+    } catch (e) {
+      print('Erreur lors de la prise de photo : $e');
+    }
+  }
+
+  /// Dialogue pour choisir entre Appareil photo et Galerie
+  void _afficherOptionPhoto() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt, color: KColors.indigo),
+              title: const Text('Prendre une photo'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _prendrePhotoCamera(ImageSource.camera);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library, color: KColors.indigo),
+              title: const Text('Choisir dans la galerie'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _choisirPhotosGalerie(ImageSource.gallery);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _creerCommande() async {
@@ -70,64 +156,30 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
     });
 
     try {
-      final atelier = await atelierService.atelierCourant();
-      final atelierId = atelier['id'] as String;
       final prixTotal =
           double.tryParse(_prixCtrl.text.replaceAll(' ', '')) ?? 0;
       final acompte =
           double.tryParse(_acompteCtrl.text.replaceAll(' ', '')) ?? 0;
-      final connecte = await connectivityService.estConnecte();
 
-      final commandeBody = {
-        'atelier': atelierId,
-        'client': _clientSelectionne!.id,
-        'type_vetement': _typeVetement,
-        'tissu': _tissuSelectionne?.$1,
-        'prix_total': prixTotal,
-        'statut': 'attente',
-        'date_livraison_prevue': _dateLivraison!
-            .toIso8601String()
-            .split('T')
-            .first,
-      };
+      await ref
+          .read(nouvelleCommandeControllerProvider.notifier)
+          .creerCommande(
+        clientId: _clientSelectionne!.id,
+        clientNom: _clientSelectionne!.nom,
+        typeVetement: _typeVetement!,
+        dateLivraison: _dateLivraison!,
+        prixTotal: prixTotal,
+        acompte: acompte,
+        tissu: _tissuSelectionne?.$1,
+        photos: _photos, // 👈 Passage de la liste des fichiers photos
+      );
 
-      if (connecte) {
-        // En ligne : commande ET acompte créés normalement, liés par le vrai
-        // identifiant renvoyé par le serveur.
-        final commande = await pb
-            .collection('commandes')
-            .create(body: commandeBody);
-        if (acompte > 0) {
-          await pb
-              .collection('paiements')
-              .create(
-                body: {
-                  'commande': commande.id,
-                  'montant': acompte,
-                  'mode': 'especes',
-                },
-              );
-        }
-      } else {
-        // Hors-ligne : la commande passe par le dépôt (créée dès le retour
-        // du réseau). L'acompte, lui, ne peut pas être lié de façon fiable
-        // à un identifiant qui n'existe pas encore côté serveur — on prévient
-        // le tailleur plutôt que de risquer une liaison cassée.
-        await OfflineRepository('commandes').creer(commandeBody);
-        if (acompte > 0 && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Commande enregistrée hors-ligne. Ajoute l\'acompte depuis sa fiche une fois la connexion revenue.',
-              ),
-            ),
-          );
-        }
-      }
-
+      ref.invalidate(commandesControllerProvider);
+      ref.invalidate(accueilControllerProvider);
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       setState(() => _erreur = 'Une erreur est survenue : $e');
+      print('Erreur lors de la création de la commande : $e');
     } finally {
       if (mounted) setState(() => _envoiEnCours = false);
     }
@@ -163,6 +215,7 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
                   children: [
                     _fieldBlock('CLIENT', _buildClientField()),
                     _fieldBlock('TYPE DE VÊTEMENT', _buildTypeVetementField()),
+                    _fieldBlock('PHOTOS / MODÈLES', _buildPhotosField()), // 👈 Bloc Photos
                     _fieldBlock('TISSU', _buildTissuField()),
                     _fieldBlock('LIVRAISON PRÉVUE', _buildDateField()),
                     Row(
@@ -196,13 +249,13 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
                       onPressed: _envoiEnCours ? null : _creerCommande,
                       child: _envoiEnCours
                           ? const SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
                           : const Text('Créer la commande'),
                     ),
                     const SizedBox(height: 24),
@@ -271,7 +324,8 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
   InputDecoration get _decoration => InputDecoration(
     filled: true,
     fillColor: Colors.white,
-    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    contentPadding:
+    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
     border: OutlineInputBorder(
       borderRadius: BorderRadius.circular(12),
       borderSide: const BorderSide(color: KColors.cardBorder),
@@ -310,18 +364,18 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
             children: clients
                 .map(
                   (c) => Padding(
-                    padding: const EdgeInsets.all(14.0),
-                    child: ListTile(
-                      splashColor: KColors.indigo.withValues(alpha: 0.1),
-                      shape: RoundedRectangleBorder(
-                        side: const BorderSide(color: KColors.cardBorder),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      title: Text(c.nom),
-                      onTap: () => Navigator.pop(context, c),
-                    ),
+                padding: const EdgeInsets.all(14.0),
+                child: ListTile(
+                  splashColor: KColors.indigo.withValues(alpha: 0.1),
+                  shape: RoundedRectangleBorder(
+                    side: const BorderSide(color: KColors.cardBorder),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                )
+                  title: Text(c.nom),
+                  onTap: () => Navigator.pop(context, c),
+                ),
+              ),
+            )
                 .toList(),
           ),
         );
@@ -344,12 +398,88 @@ class _NouvelleCommandePageState extends State<NouvelleCommandePage> {
       items: _typesVetement
           .map(
             (t) => DropdownMenuItem(
-              value: t,
-              child: Text(t, style: const TextStyle(fontSize: 13)),
-            ),
-          )
+          value: t,
+          child: Text(t, style: const TextStyle(fontSize: 13)),
+        ),
+      )
           .toList(),
       onChanged: (v) => setState(() => _typeVetement = v),
+    );
+  }
+
+  /// Composant d'affichage des photos sélectionnées avec bouton d'ajout
+  Widget _buildPhotosField() {
+    return SizedBox(
+      height: 70,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: _photos.length + 1,
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            // Bouton Ajouter Photo
+            return GestureDetector(
+              onTap: _afficherOptionPhoto,
+              child: Container(
+                width: 70,
+                height: 70,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: KColors.cardBorder),
+                ),
+                child: const Icon(
+                  Icons.add_a_photo,
+                  color: KColors.indigo,
+                  size: 24,
+                ),
+              ),
+            );
+          }
+
+          final file = _photos[index - 1];
+          return Stack(
+            children: [
+              Container(
+                width: 70,
+                height: 70,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: KColors.cardBorder),
+                  image: DecorationImage(
+                    image: FileImage(file),
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 2,
+                right: 10,
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _photos.removeAt(index - 1);
+                    });
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: const BoxDecoration(
+                      color: Colors.black54,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.close,
+                      size: 14,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 

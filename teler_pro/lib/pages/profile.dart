@@ -1,69 +1,174 @@
+import 'dart:io';
+
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:teler_pro/models/pocketbase.dart';
-import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/outils/authservcice.dart';
+import 'package:teler_pro/outils/exp.dart';
 import 'package:teler_pro/outils/themes.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-class ProfilPage extends StatefulWidget {
+import '../controlers/users/user_ctr.dart';
+
+class ProfilPage extends ConsumerStatefulWidget {
   const ProfilPage({super.key});
 
   @override
-  State<ProfilPage> createState() => _ProfilPageState();
+  ConsumerState<ProfilPage> createState() => _ProfilPageState();
 }
 
-class _ProfilPageState extends State<ProfilPage> {
-  late Future<_ProfilData> _future;
+class _ProfilPageState extends ConsumerState<ProfilPage> {
   bool _modeEdition = false;
   bool _envoiEnCours = false;
+  bool _photoSupprimee = false; // 👈 Pour gérer la suppression explicite
+  File? _imageSelectionnee;
 
   final _nomCtrl = TextEditingController();
   final _telephoneCtrl = TextEditingController();
   final _villeCtrl = TextEditingController();
+  final _nomUserCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
 
   @override
-  void initState() {
-    super.initState();
-    _future = _charger();
+  void dispose() {
+    _nomCtrl.dispose();
+    _telephoneCtrl.dispose();
+    _villeCtrl.dispose();
+    _nomUserCtrl.dispose();
+    _emailCtrl.dispose();
+    super.dispose();
   }
 
-  Future<_ProfilData> _charger() async {
-    final atelier = await atelierService.atelierCourant();
-    _nomCtrl.text = atelier['nom'] as String? ?? '';
-    _telephoneCtrl.text = atelier['telephone'] as String;
-    _villeCtrl.text = atelier['ville'] as String? ?? '';
-
-    return _ProfilData(
-      nom: atelier['nom'] as String,
-      statutAbonnement: atelier['statut_abonnement'] as String,
-      telephone: atelier['telephone'] as String?,
-      ville: atelier['ville'] as String?,
-      email: pb.authStore.record?.getStringValue('email') ?? '',
-      atelierId: atelier['id'] as String,
+  /// Boîte de dialogue pour choisir entre Galerie et Appareil photo
+  void _afficherDialogueSourceImage({required bool aDejaUneImage}) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Photo de profil',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const Icon(Icons.photo_library, color: KColors.indigo),
+                title: const Text('Choisir dans la galerie'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _choisirImage(ImageSource.gallery);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.camera_alt, color: KColors.indigo),
+                title: const Text('Prendre une photo'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _choisirImage(ImageSource.camera);
+                },
+              ),
+              if ((aDejaUneImage && !_photoSupprimee) || _imageSelectionnee != null)
+                ListTile(
+                  leading: const Icon(Icons.delete, color: KColors.terracotta),
+                  title: const Text(
+                    'Supprimer la photo',
+                    style: TextStyle(color: KColors.terracotta),
+                  ),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    setState(() {
+                      _imageSelectionnee = null;
+                      _photoSupprimee = true; // Indique qu'on veut supprimer l'avatar
+                    });
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
-  Future<void> _enregistrer() async {
+  /// Sélection et compression de l'image
+  Future<void> _choisirImage(ImageSource source) async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(
+      source: source,
+      maxHeight: 500,
+      maxWidth: 500,
+      imageQuality: 75,
+    );
+    if (pickedFile != null) {
+      setState(() {
+        _imageSelectionnee = File(pickedFile.path);
+        _photoSupprimee = false;
+      });
+    }
+  }
+
+  /// Remplit les champs textes à partir des données réelles
+  void _initialiserChamps(
+      Map<String, dynamic> atelier,
+      Map<String, dynamic> user,
+      ) {
+    _nomCtrl.text = atelier['nom'] as String? ?? '';
+    _telephoneCtrl.text = atelier['telephone'] as String? ?? '';
+    _villeCtrl.text = atelier['ville'] as String? ?? '';
+    _emailCtrl.text = user['email'] as String? ?? '';
+    _nomUserCtrl.text = user['name'] as String? ?? '';
+    _imageSelectionnee = null;
+    _photoSupprimee = false;
+  }
+
+  Future<void> _enregistrer(String atelierId, String userId) async {
     setState(() => _envoiEnCours = true);
     try {
-      final atelier = await atelierService.atelierCourant();
-      final atelierId = atelier['id'] as String;
-      await pb
-          .collection('ateliers')
-          .update(
-            atelierId,
-            body: {
-              'nom': _nomCtrl.text.trim(),
-              'telephone': _telephoneCtrl.text.trim(),
-              'ville': _villeCtrl.text.trim(),
-            },
-          );
-      atelierService
-          .reinitialiserCache(); // le cache doit être invalidé après modification
-      setState(() {
-        _modeEdition = false;
-        _future = _charger();
-      });
+      final bodyAtelier = {
+        'nom': _nomCtrl.text.trim(),
+        'telephone': _telephoneCtrl.text.trim(),
+        'ville': _villeCtrl.text.trim(),
+      };
+
+      final bodyUser = <String, dynamic>{
+        'name': _nomUserCtrl.text.trim(),
+      };
+
+      // Si l'utilisateur a choisi de supprimer la photo
+      if (_photoSupprimee) {
+        bodyUser['avatar'] = null; // Réinitialise l'avatar dans PocketBase
+      }
+
+      // 💡 Transmet `_imageSelectionnee` SANS le point d'exclamation !
+      await ref
+          .read(atelierUserProvider.notifier)
+          .modifier(
+        atelierId,
+        userId,
+        bodyAtelier,
+        bodyUser,
+        _imageSelectionnee!, // Accepte null si aucune nouvelle photo n'a été choisie
+      );
+
+      if (mounted) {
+        setState(() {
+          _modeEdition = false;
+          _photoSupprimee = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Colors.green,
+            content: Text('Profil mis à jour avec succès'),
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -92,6 +197,18 @@ class _ProfilPageState extends State<ProfilPage> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<AtelierUserData>>(atelierUserProvider, (
+        previous,
+        next,
+        ) {
+      next.whenData((data) {
+        final nomAtelier = data.atelier['nom'] as String? ?? 'Mon Atelier';
+        ref.read(nomAtelierProvider.notifier).state = nomAtelier;
+      });
+    });
+
+    final atelierUserAsync = ref.watch(atelierUserProvider);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profil'),
@@ -99,25 +216,40 @@ class _ProfilPageState extends State<ProfilPage> {
           if (!_modeEdition)
             IconButton(
               icon: const Icon(Icons.edit_outlined),
-              onPressed: () => setState(() => _modeEdition = true),
+              onPressed: () {
+                atelierUserAsync.whenData((data) {
+                  _initialiserChamps(data.atelier, data.user);
+                  setState(() => _modeEdition = true);
+                });
+              },
             ),
         ],
       ),
-      body: FutureBuilder<_ProfilData>(
-        future: _future,
-        builder: (context, snap) {
-          if (snap.hasError) {
-            return Center(
-              child: Text(
-                'Erreur : ${snap.error}',
-                style: const TextStyle(color: KColors.terracotta),
-              ),
-            );
-          }
-          if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final data = snap.data!;
+      body: atelierUserAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (err, stack) => Center(
+          child: Text(
+            'Erreur : $err',
+            style: const TextStyle(color: KColors.terracotta),
+          ),
+        ),
+        data: (data) {
+          final atelier = data.atelier;
+          final user = data.user;
+          final nomAtelier = atelier['nom'] as String? ?? 'Mon Atelier';
+          final email = user['email'] as String? ?? '';
+          final nom = user['name'] as String? ?? '';
+          final avatarFileName = user['avatar'] as String? ?? '';
+          final statutAbonnement =
+              atelier['statut_abonnement'] as String? ?? 'essai';
+          final telephone = atelier['telephone'] as String?;
+          final ville = atelier['ville'] as String?;
+          final atelierId = atelier['id'] as String;
+          final userId = user['id'] as String;
+
+          final String? avatarUrl = (avatarFileName.isNotEmpty && !_photoSupprimee)
+              ? '${pb.baseURL}/api/files/users/$userId/$avatarFileName'
+              : null;
 
           return ListView(
             padding: const EdgeInsets.all(20),
@@ -125,48 +257,125 @@ class _ProfilPageState extends State<ProfilPage> {
               Center(
                 child: Column(
                   children: [
-                    Container(
-                      width: 66,
-                      height: 66,
-                      decoration: const BoxDecoration(
-                        color: KColors.indigo,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Center(
-                        child: Text(
-                          data.nom.isNotEmpty ? data.nom[0].toUpperCase() : '?',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 26,
-                            fontWeight: FontWeight.w600,
-                          ),
+                    Stack(
+                      children: [
+                        // 🟢 AFFICHAGE DE L'AVATAR
+                        SizedBox(
+                          width: 150,
+                          height: 150,
+                          child: _imageSelectionnee != null
+                              ? CircleAvatar(
+                            radius: 50,
+                            backgroundImage: FileImage(
+                              _imageSelectionnee!,
+                            ),
+                          )
+                              : (avatarUrl != null
+                              ? CachedNetworkImage(
+                            fit: BoxFit.cover,
+                            imageUrl: avatarUrl,
+                            imageBuilder:
+                                (context, imageProvider) =>
+                                CircleAvatar(
+                                  radius: 50,
+                                  backgroundImage:
+                                  imageProvider,
+                                ),
+                            placeholder: (context, url) =>
+                            const Center(
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                              ),
+                            ),
+                            errorWidget: (context, url, error) =>
+                                CircleAvatar(
+                                  radius: 50,
+                                  backgroundColor: KColors.indigo,
+                                  child: Text(
+                                    nom.isNotEmpty
+                                        ? nom[0].toUpperCase()
+                                        : '?',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 26,
+                                    ),
+                                  ),
+                                ),
+                          )
+                              : CircleAvatar(
+                            radius: 50,
+                            backgroundColor: KColors.indigo,
+                            child: Text(
+                              nom.isNotEmpty
+                                  ? nom[0].toUpperCase()
+                                  : '?',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 26,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          )),
                         ),
-                      ),
+                        if (_modeEdition)
+                          Positioned(
+                            bottom: 0,
+                            right: 0,
+                            child: GestureDetector(
+                              onTap: () => _afficherDialogueSourceImage(
+                                aDejaUneImage: avatarUrl != null,
+                              ),
+                              child: Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: KColors.indigo,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: const Icon(
+                                  Icons.camera_alt,
+                                  color: Colors.white,
+                                  size: 16,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 12),
                     if (!_modeEdition) ...[
                       Text(
-                        data.nom,
+                        nom,
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 2),
                       Text(
-                        data.email,
-                        style: TextStyle(fontSize: 12, color: KColors.muted),
+                        email,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: KColors.muted,
+                        ),
                       ),
                     ],
                   ],
                 ),
               ),
               const SizedBox(height: 24),
-
               if (_modeEdition) ...[
                 TextField(
                   controller: _nomCtrl,
                   decoration: _decoration('Nom de l\'atelier'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _nomUserCtrl,
+                  decoration: _decoration('Nom de l\'utilisateur'),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -185,23 +394,28 @@ class _ProfilPageState extends State<ProfilPage> {
                       child: OutlinedButton(
                         onPressed: _envoiEnCours
                             ? null
-                            : () => setState(() => _modeEdition = false),
+                            : () => setState(() {
+                          _modeEdition = false;
+                          _photoSupprimee = false;
+                        }),
                         child: const Text('Annuler'),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: ElevatedButton(
-                        onPressed: _envoiEnCours ? null : _enregistrer,
+                        onPressed: _envoiEnCours
+                            ? null
+                            : () => _enregistrer(atelierId, userId),
                         child: _envoiEnCours
                             ? const SizedBox(
-                                height: 16,
-                                width: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
+                          height: 16,
+                          width: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
                             : const Text('Enregistrer'),
                       ),
                     ),
@@ -209,34 +423,38 @@ class _ProfilPageState extends State<ProfilPage> {
                 ),
               ] else ...[
                 _InfoRow(
+                  label: 'Atelier',
+                  valeur: nomAtelier.isNotEmpty ? nomAtelier : 'Non renseigné',
+                ),
+                _InfoRow(
                   label: 'Abonnement',
-                  valeur: _labelStatut(data.statutAbonnement),
+                  valeur: _labelStatut(statutAbonnement),
                 ),
                 _InfoRow(
                   label: 'Téléphone',
-                  valeur: data.telephone?.isNotEmpty == true
-                      ? data.telephone!
+                  valeur: telephone?.isNotEmpty == true
+                      ? telephone!
                       : 'Non renseigné',
                 ),
                 _InfoRow(
                   label: 'Ville',
-                  valeur: data.ville?.isNotEmpty == true
-                      ? data.ville!
-                      : 'Non renseignée',
+                  valeur: ville?.isNotEmpty == true ? ville! : 'Non renseignée',
                 ),
-
-                if (data.statutAbonnement != 'actif') ...[
+                if (statutAbonnement != 'actif') ...[
                   const SizedBox(height: 16),
                   ElevatedButton(
-                    onPressed: () {
-                      _ouvrirPagePaiement(data.atelierId);
-                    },
+                    onPressed: () => _ouvrirPagePaiement(atelierId),
                     child: const Text('S\'abonner'),
                   ),
                 ],
                 const SizedBox(height: 32),
                 OutlinedButton(
-                  onPressed: () => authService.deconnecter(),
+                  onPressed: () async {
+                    await authService.deconnecter();
+                    await ref
+                        .read(atelierUserProvider.notifier)
+                        .reinitialiserCache();
+                  },
                   style: OutlinedButton.styleFrom(
                     foregroundColor: KColors.terracotta,
                     side: const BorderSide(color: KColors.terracotta),
@@ -259,13 +477,7 @@ class _ProfilPageState extends State<ProfilPage> {
   };
 
   Future<void> _ouvrirPagePaiement(String atelierId) async {
-    // La page checkout.html est servie directement par ton PocketBase,
-    // depuis pb_public/ — pas besoin d'un serveur web séparé.
     final url = Uri.parse('${pb.baseURL}/checkout.html?atelier=$atelierId');
-
-    // externalApplication = force l'ouverture dans le navigateur du système,
-    // jamais dans une WebView intégrée — important pour rester dans les
-    // clous des règles Google Play sur les paiements in-app.
     final ouvert = await launchUrl(url, mode: LaunchMode.externalApplication);
 
     if (!ouvert && mounted) {
@@ -298,7 +510,10 @@ class _InfoRow extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(label, style: TextStyle(fontSize: 13, color: KColors.muted)),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 13, color: KColors.muted),
+            ),
             Text(
               valeur,
               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
@@ -308,22 +523,4 @@ class _InfoRow extends StatelessWidget {
       ),
     );
   }
-}
-
-class _ProfilData {
-  final String atelierId;
-  final String nom;
-  final String statutAbonnement;
-  final String? telephone;
-  final String? ville;
-  final String email;
-
-  _ProfilData({
-    required this.nom,
-    required this.statutAbonnement,
-    required this.telephone,
-    required this.ville,
-    required this.email,
-    required this.atelierId,
-  });
 }

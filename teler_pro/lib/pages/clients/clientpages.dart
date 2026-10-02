@@ -1,124 +1,120 @@
 import 'package:flutter/material.dart';
-import 'package:teler_pro/controlers/client_ctr.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
+import 'package:teler_pro/controlers/clients_ctr/clients_controller.dart';
 import 'package:teler_pro/models/model.dart';
 import 'package:teler_pro/models/pocketbase.dart';
 import 'package:teler_pro/outils/themes.dart';
 import 'package:teler_pro/pages/clients/ficheclients.dart';
 import 'package:teler_pro/pages/clients/nvclpage.dart';
 
-class ClientsPage extends StatefulWidget {
+import '../../outils/dialogue.dart';
+
+class ClientsPage extends ConsumerStatefulWidget {
   const ClientsPage({super.key});
 
   @override
-  State<ClientsPage> createState() => _ClientsPageState();
+  ConsumerState<ClientsPage> createState() => _ClientsPageState();
 }
 
-class _ClientsPageState extends State<ClientsPage> {
-  final _controller = ClientsController()..charger();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _controller.charger();
-  }
-
+class _ClientsPageState extends ConsumerState<ClientsPage> {
   @override
   Widget build(BuildContext context) {
+    final stateclient = ref.watch(clientsControllerProvider);
+
     return Scaffold(
       appBar: AppBar(title: const Text('Clients')),
-      body: ListenableBuilder(
-        listenable: _controller,
-        builder: (context, _) => _buildCorps(),
+      body: SafeArea(
+        child: stateclient.when(
+          data: (data) => _buildCorps(data),
+          error: (error, stackTrace) => Center(
+            child: Text(
+              'Erreur: $error',
+              style: const TextStyle(color: KColors.terracotta),
+            ),
+          ),
+          loading: () => const Center(child: CircularProgressIndicator()),
+        ),
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => NouveauClientPage(controller: _controller),
-          ),
-        ),
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const NouveauClientPage()),
+          );
+        },
         child: const Icon(Icons.add),
       ),
     );
   }
 
-  Widget _buildCorps() {
-    if (_controller.erreur != null) {
-      return Center(
-        child: Text(
-          _controller.erreur!,
-          style: const TextStyle(color: KColors.terracotta),
-        ),
-      );
-    }
-    if (_controller.chargement && _controller.clients.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
+  Widget _buildCorps(List<ClientModel> clients) {
+    final controller = ref.read(clientsControllerProvider.notifier);
 
-    final clients = _controller.clients;
     return RefreshIndicator(
-      onRefresh: _controller.rafraichir,
+      onRefresh: controller.rafraichir,
       child: clients.isEmpty
           ? ListView(
-              children: [
-                SizedBox(
-                  height: MediaQuery.of(context).size.height * 0.6,
-                  child: const Center(
-                    child: Text(
-                      'Aucun client pour l\'instant\nAppuie sur + pour en ajouter un',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: KColors.muted, fontSize: 13),
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : ListView.builder(
-              itemCount: clients.length,
-              itemBuilder: (context, i) {
-                final client = clients[i];
-                return _ClientTile(
-                  client: client,
-                  onTap: () async {
-                    // 1. Information visuelle si le client n'est pas encore sur PocketBase
-                    if (client.enAttente) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Client local : sera synchronisé au retour de la connexion',
+        children: [
+          SizedBox(
+            height: MediaQuery.of(context).size.height * 0.6,
+            child: const Center(
+              child: Text(
+                'Aucun client pour l\'instant\nAppuie sur + pour en ajouter un',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: KColors.muted, fontSize: 13),
+              ),
+            ),
+          ),
+        ],
+      )
+          : AnimationLimiter(
+        child: ListView.builder(
+          itemCount: clients.length,
+          itemBuilder: (context, i) {
+            final client = clients[i];
+            return AnimationConfiguration.staggeredList(
+              position: i,
+              duration: const Duration(milliseconds: 375),
+              child: SlideAnimation(
+                verticalOffset: 50.0,
+                child: FadeInAnimation(
+                  child: _ClientTile(
+                    client: client,
+                    onTap: () async {
+                      if (client.enAttente) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Client local : sera synchronisé au retour de la connexion',
+                            ),
+                            duration: Duration(seconds: 2),
                           ),
-                          duration: Duration(seconds: 2),
+                        );
+                      }
+
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => FicheClientPage(clientId: client.id),
                         ),
                       );
-                      // PAS DE RETURN ICI : la navigation continue !
-                    }
 
-                    // 2. Navigation vers la fiche avec l'ID local/Hive
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => FicheClientPage(clientId: client.id),
-                      ),
-                    );
-
-                    if (!context.mounted) return;
-                    _controller.charger();
-                  },
-                );
-              },
-            ),
+                      if (!context.mounted) return;
+                    },
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 }
 
-// Widget séparé pour gérer le comptage des commandes par client
-class _ClientTile extends StatelessWidget {
+// Transformé en ConsumerWidget pour avoir accès à `ref`
+class _ClientTile extends ConsumerWidget {
   final ClientModel client;
   final VoidCallback onTap;
 
@@ -131,81 +127,99 @@ class _ClientTile extends StatelessWidget {
     return records.length;
   }
 
+
   @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 8),
-      elevation: 0,
-      color: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        onTap: onTap,
-        leading: CircleAvatar(
-          backgroundColor: client.enAttente ? KColors.muted : KColors.indigo,
-          child: Text(
-            client.nom.isNotEmpty ? client.nom[0].toUpperCase() : '?',
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Dismissible(
+      key: Key(client.id),
+      direction: DismissDirection.endToStart,
+      confirmDismiss: (direction) async {
+        final reponse = await afficherDialogue(context,'Voulez-vous vraiment supprimer ce client ?');
+        return reponse ?? false;
+      },
+      onDismissed: (direction) {
+        // Appelle la méthode dans le controller
+        ref.read(clientsControllerProvider.notifier).SupprimerClient(client.id);
+      },
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 8),
+        decoration: BoxDecoration(
+          color: Colors.red,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Icon(
+          Icons.delete_sweep,
+          color: Colors.white,
+          size: 28,
+        ),
+      ),
+      child: Card(
+        margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 8),
+        elevation: 0,
+        color: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          onTap: onTap,
+          leading: CircleAvatar(
+            backgroundColor: client.enAttente ? KColors.muted : KColors.indigo,
+            child: Text(
+              client.nom.isNotEmpty ? client.nom[0].toUpperCase() : '?',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
-        ),
-        title: Text(
-          client.nom,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-        ),
-        subtitle: Text(
-          client.telephone ?? '',
-          style: const TextStyle(fontSize: 12, color: KColors.muted),
-        ),
-        trailing: client.enAttente
-            ? Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEFE1C6),
-                  borderRadius: BorderRadius.circular(20),
+          title: Text(
+            client.nom,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          subtitle: Text(
+            client.telephone ?? '',
+            style: const TextStyle(fontSize: 12, color: KColors.muted),
+          ),
+          trailing: client.enAttente
+              ? Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEFE1C6),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.cloud_off, size: 12, color: Color(0xFF8A6A1F)),
+                SizedBox(width: 4),
+                Text(
+                  'En attente',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Color(0xFF8A6A1F),
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.cloud_off, size: 12, color: Color(0xFF8A6A1F)),
-                    SizedBox(width: 4),
-                    Text(
-                      'En attente',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: Color(0xFF8A6A1F),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
+              ],
+            ),
+          )
+              : FutureBuilder<int>(
+            future: _getNombreCommandes(client.id),
+            builder: (context, snapshot) {
+              return SizedBox(
+                width: 29,
+                height: 29,
+                child: Center(
+                  child: CircleAvatar(
+                    radius: 30.0,
+                    child: Text('${snapshot.data ?? 0}'),
+                  ),
                 ),
-              )
-            : FutureBuilder<int>(
-                future: _getNombreCommandes(client.id),
-                builder: (context, snapshot) {
-                  final count = snapshot.data ?? 0;
-                  return Container(
-                    width: 28,
-                    height: 28,
-                    decoration: const BoxDecoration(
-                      color: KColors.indigo,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: Text(
-                        '$count',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
+              );
+            },
+          ),
+        ),
       ),
     );
   }

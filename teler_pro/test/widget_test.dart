@@ -7,24 +7,26 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pocketbase/pocketbase.dart';
 
 import 'package:teler_pro/main.dart';
+import 'package:teler_pro/models/pocketbase.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
+  // 1. Initialiser PocketBase avant l'exécution des tests
+  setUp(() {
+    pb = PocketBase('http://192.168.1.68:8090'); // Remplacez par l'URL ou un mock
+  });
+
+  testWidgets('Chargement de l\'écran d\'accueil KuturaApp', (WidgetTester tester) async {
+    // 2. Charger votre application
     await tester.pumpWidget(const KuturaApp());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    // 3. Laisser le temps aux animations et futures de se terminer
+    await tester.pumpAndSettle();
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // 4. Tester des éléments réellement présents dans votre interface KuturaApp
+    // Exemple : Vérifier qu'un texte ou un bouton spécifique existe
+    expect(find.byType(MaterialApp), findsOneWidget);
   });
 }

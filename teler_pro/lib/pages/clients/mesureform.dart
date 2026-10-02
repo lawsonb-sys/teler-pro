@@ -146,7 +146,7 @@ class _MesuresFormPageState extends State<MesuresFormPage> {
 
     try {
       if (widget.mesureExistante?.id != null) {
-        await widget.mesuresRepo.modifier(widget.mesureExistante!.id!, body);
+        await widget.mesuresRepo.modifierTexte(widget.mesureExistante!.id!, body);
       } else {
         await widget.mesuresRepo.creer(body);
       }

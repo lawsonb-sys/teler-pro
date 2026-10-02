@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:teler_pro/controlers/clients_ctr/clients_controller.dart';
+import 'package:teler_pro/controlers/command_ctr/commande_ctr.dart';
 import 'package:teler_pro/models/model.dart';
 import 'package:teler_pro/outils/mesure_template.dart';
 import 'package:teler_pro/outils/themes.dart';
@@ -9,69 +12,38 @@ import 'package:teler_pro/pages/commandes/nvcommande.dart';
 import 'package:teler_pro/pages/paimentcmd.dart';
 import 'package:teler_pro/repo/offline_repo.dart';
 
-class FicheClientPage extends StatefulWidget {
+class FicheClientPage extends ConsumerStatefulWidget {
   final String clientId;
   const FicheClientPage({super.key, required this.clientId});
 
   @override
-  State<FicheClientPage> createState() => _FicheClientPageState();
+  ConsumerState<FicheClientPage> createState() => _FicheClientPageState();
 }
 
-class _FicheClientPageState extends State<FicheClientPage> {
-  late Future<_FicheData> _future;
-
-  final _clientsRepo = OfflineRepository('clients');
-  final _commandesRepo = OfflineRepository('commandes');
+class _FicheClientPageState extends ConsumerState<FicheClientPage> {
   final _mesuresRepo = OfflineRepository('mesures');
 
   @override
   void initState() {
     super.initState();
-    _future = _charger();
-    _actualiserArrierePlan();
   }
 
-  Future<void> _actualiserArrierePlan() async {
-    try {
-      await _clientsRepo.actualiser();
-      await _commandesRepo.actualiser(filter: 'client = "${widget.clientId}"');
-      await _mesuresRepo.actualiser(filter: 'client = "${widget.clientId}"');
-    } catch (_) {}
-  }
-
-  Future<_FicheData> _charger() async {
-    // 1. Lire le client dans Hive local
-    final cacheClients = await _clientsRepo.lireCache();
-    final clientMap = cacheClients.firstWhere(
-      (c) => c['id'] == widget.clientId,
-      orElse: () => {},
-    );
-
-    if (clientMap.isEmpty) {
-      throw Exception("Client introuvable dans le cache local.");
-    }
-    final client = ClientModel.fromCacheMap(clientMap);
-
-    // 2. Lire les commandes du client dans Hive local
-    final cacheCommandes = await _commandesRepo.lireCache();
-    final commandes = cacheCommandes
-        .where((c) => c['client'] == widget.clientId)
-        .map((c) => CommandeModel.fromCacheMap(c))
-        .toList();
-
-    return _FicheData(client: client, commandes: commandes);
-  }
-
-  /// Recharge la fiche client locale et en arrière-plan
   Future<void> _rafraichirPage() async {
-    setState(() {
-      _future = _charger();
-    });
-    await _actualiserArrierePlan();
+    ref.invalidate(clientsControllerProvider);
+    ref.invalidate(commandesControllerProvider);
+  }
+
+  Future<void> modifclient(Map<String, String> data, String id) async {
+    if (mounted) {
+      await ref.read(clientsControllerProvider.notifier).modifier(id, data);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final clientsAsync = ref.watch(clientsControllerProvider);
+    final commandesAsync = ref.watch(commandesControllerProvider);
+
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: const SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
@@ -81,32 +53,31 @@ class _FicheClientPageState extends State<FicheClientPage> {
         body: SafeArea(
           top: true,
           bottom: false,
-          child: FutureBuilder<_FicheData>(
-            future: _future,
-            builder: (context, snap) {
-              if (snap.hasError) {
-                return Center(
-                  child: Text(
-                    'Erreur : ${snap.error}',
-                    style: const TextStyle(color: KColors.terracotta),
-                  ),
-                );
-              }
-              if (!snap.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final data = snap.data!;
+          child: clientsAsync.when(
+            data: (clientsList) {
+              // Extraction du client spécifique (Correction du champ nom vide)
+              final client = clientsList.firstWhere(
+                (c) => c.id == widget.clientId,
+                orElse: () => ClientModel(
+                  id: widget.clientId,
+                  nom: 'Client inconnu',
+                  telephone: '',
+                ),
+              );
+
+              // Extraction des commandes du client
+              final commandesList = commandesAsync.maybeWhen(
+                data: (list) =>
+                    list.where((c) => c.clientId == widget.clientId).toList(),
+                orElse: () => <CommandeModel>[],
+              );
 
               return RefreshIndicator(
                 onRefresh: _rafraichirPage,
                 child: CustomScrollView(
                   slivers: [
                     SliverToBoxAdapter(
-                      child: _buildHero(
-                        context,
-                        data.client,
-                        data.commandes.length,
-                      ),
+                      child: _buildHero(context, client, commandesList.length),
                     ),
 
                     // SECTION MESURES
@@ -126,9 +97,9 @@ class _FicheClientPageState extends State<FicheClientPage> {
                     ),
 
                     // HISTORIQUE COMMANDES
-                    SliverToBoxAdapter(
+                    const SliverToBoxAdapter(
                       child: Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 20, 18, 8),
+                        padding: EdgeInsets.fromLTRB(18, 20, 18, 8),
                         child: Text(
                           'HISTORIQUE',
                           style: TextStyle(
@@ -140,10 +111,10 @@ class _FicheClientPageState extends State<FicheClientPage> {
                         ),
                       ),
                     ),
-                    if (data.commandes.isEmpty)
-                      SliverToBoxAdapter(
+                    if (commandesList.isEmpty)
+                      const SliverToBoxAdapter(
                         child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 18),
+                          padding: EdgeInsets.symmetric(horizontal: 18),
                           child: Text(
                             'Aucune commande pour ce client',
                             style: TextStyle(
@@ -155,9 +126,9 @@ class _FicheClientPageState extends State<FicheClientPage> {
                       )
                     else
                       SliverList.builder(
-                        itemCount: data.commandes.length,
+                        itemCount: commandesList.length,
                         itemBuilder: (context, i) {
-                          final c = data.commandes[i];
+                          final c = commandesList[i];
                           return Card(
                             margin: const EdgeInsets.symmetric(
                               horizontal: 16,
@@ -202,11 +173,11 @@ class _FicheClientPageState extends State<FicheClientPage> {
                               context,
                               MaterialPageRoute(
                                 builder: (_) => NouvelleCommandePage(
-                                  clientIdPreselectionne: data.client.id,
+                                  clientIdPreselectionne: client.id,
                                 ),
                               ),
                             );
-                            if (cree == true || mounted) _rafraichirPage();
+                            if (cree == true && mounted) _rafraichirPage();
                           },
                           child: const Text('Nouvelle commande'),
                         ),
@@ -216,13 +187,19 @@ class _FicheClientPageState extends State<FicheClientPage> {
                 ),
               );
             },
+            error: (err, stack) => Center(
+              child: Text(
+                'Erreur : $err',
+                style: const TextStyle(color: KColors.terracotta),
+              ),
+            ),
+            loading: () => const Center(child: CircularProgressIndicator()),
           ),
         ),
       ),
     );
   }
 
-  // Boîte de dialogue de modification du client
   void _afficherFormulaireModification(
     BuildContext context,
     ClientModel client,
@@ -273,26 +250,21 @@ class _FicheClientPageState extends State<FicheClientPage> {
             ),
             onPressed: () async {
               if (!formKey.currentState!.validate()) return;
-
+              print('enr appuyer');
               final donneesModifiees = {
                 'nom': nomController.text.trim(),
                 'telephone': telephoneController.text.trim(),
               };
 
               try {
-                // 1. Modification via le repository
-                await _clientsRepo.modifier(client.id, donneesModifiees);
+                await modifclient(donneesModifiees, client.id);
 
-                if (ctx.mounted) {
-                  Navigator.pop(ctx);
+                Navigator.pop(ctx);
+                _rafraichirPage();
 
-                  // 2. Recharge l'affichage immédiatement
-                  _rafraichirPage();
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Client modifié avec succès')),
-                  );
-                }
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Client modifié avec succès')),
+                );
               } catch (e) {
                 if (ctx.mounted) {
                   ScaffoldMessenger.of(
@@ -596,11 +568,4 @@ class _FicheClientPageState extends State<FicheClientPage> {
       ),
     );
   }
-}
-
-class _FicheData {
-  final ClientModel client;
-  final List<CommandeModel> commandes;
-
-  _FicheData({required this.client, required this.commandes});
 }

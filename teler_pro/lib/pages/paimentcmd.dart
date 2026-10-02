@@ -1,16 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart'; // 👈 Import Riverpod
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
-import 'package:pocketbase/pocketbase.dart';
-import 'package:teler_pro/controlers/commande_ctr.dart';
+import 'package:teler_pro/controlers/command_ctr/commande_ctr.dart';
+import 'package:teler_pro/controlers/paiment_ctr/paiement_controller.dart';
 import 'package:teler_pro/models/model.dart';
-import 'package:teler_pro/outils/providers.dart';
+import 'package:teler_pro/models/pocketbase.dart'; // Import pour 'pb' ou l'URL PocketBase
 import 'package:teler_pro/outils/themes.dart';
-import 'package:teler_pro/repo/offline_repo.dart';
 
-// 1. Conversion en ConsumerStatefulWidget
 class PaiementCommandePage extends ConsumerStatefulWidget {
   final String commandeId;
   const PaiementCommandePage({super.key, required this.commandeId});
@@ -24,19 +24,9 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
   final _montantCtrl = TextEditingController();
   String _modeSelectionne = 'tmoney';
   bool _envoiEnCours = false;
-  late Future<_PaiementData> _future;
+  bool _ajoutPhotoEnCours = false;
 
-  // Dépôts locaux Hive
-  final _commandesRepo = OfflineRepository('commandes');
-  final _paiementsRepo = OfflineRepository('paiements');
-  final _clientsRepo = OfflineRepository('clients');
-
-  @override
-  void initState() {
-    super.initState();
-    _future = _charger();
-    _actualiserArrierePlan();
-  }
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void dispose() {
@@ -44,64 +34,126 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
     super.dispose();
   }
 
-  Future<void> _actualiserArrierePlan() async {
+  // --- Gestion des photos ---
+
+  Future<void> _choisirPhotosGalerie() async {
     try {
-      await _clientsRepo.actualiser();
-      await _commandesRepo.actualiser();
-      await _paiementsRepo.actualiser(
-        filter: 'commande = "${widget.commandeId}"',
+      final List<XFile> pickedFiles = await _picker.pickMultiImage(
+        imageQuality: 80,
       );
-      if (mounted) {
-        setState(() => _future = _charger());
+      if (pickedFiles.isNotEmpty) {
+        await _ajouterPhotosALaCommande(
+          pickedFiles.map((x) => File(x.path)).toList(),
+        );
       }
-    } catch (_) {}
+    } catch (e) {
+      _afficherErreur('Erreur lors de la sélection des photos : $e');
+    }
   }
 
-  Future<_PaiementData> _charger() async {
-    final cacheClients = await _clientsRepo.lireCache();
-    final Map<String, String> mapClients = {
-      for (var c in cacheClients)
-        c['id'].toString(): (c['nom'] ?? c['nom_client'] ?? 'Client inconnu')
-            .toString(),
-    };
-
-    final cacheCommandes = await _commandesRepo.lireCache();
-    final commandeMap = cacheCommandes.firstWhere(
-      (c) => c['id'] == widget.commandeId,
-      orElse: () => {},
-    );
-
-    if (commandeMap.isEmpty) {
-      throw Exception("Commande introuvable dans le cache local.");
+  Future<void> _prendrePhotoCamera() async {
+    try {
+      final XFile? pickedFile = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 80,
+      );
+      if (pickedFile != null) {
+        await _ajouterPhotosALaCommande([File(pickedFile.path)]);
+      }
+    } catch (e) {
+      _afficherErreur('Erreur lors de la prise de photo : $e');
     }
-
-    final commandeMapComplete = Map<String, dynamic>.from(commandeMap);
-    final clientId = commandeMapComplete['client']?.toString() ?? '';
-
-    if (!commandeMapComplete.containsKey('clientNom') ||
-        commandeMapComplete['clientNom'] == null ||
-        commandeMapComplete['clientNom'] == '—') {
-      commandeMapComplete['clientNom'] = mapClients[clientId] ?? '—';
-    }
-
-    final cachePaiements = await _paiementsRepo.lireCache();
-    final paiements = cachePaiements
-        .where((p) => p['commande'] == widget.commandeId)
-        .map((p) => PaiementModel.fromCacheMap(p))
-        .toList();
-
-    paiements.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
-    final montantPaye = paiements.fold<double>(0, (s, p) => s + p.montant);
-    final commande = CommandeModel.fromCacheMap(
-      commandeMapComplete,
-      montantPaye: montantPaye,
-    );
-
-    return _PaiementData(commande: commande, paiements: paiements);
   }
 
-  // 🚀 Méthode de changement de statut réactivée et optimisée
+  void _afficherModalChoixPhoto() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt, color: KColors.indigo),
+              title: const Text('Prendre une photo'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _prendrePhotoCamera();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library, color: KColors.indigo),
+              title: const Text('Choisir dans la galerie'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _choisirPhotosGalerie();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _ajouterPhotosALaCommande(List<File> nouvellesPhotos) async {
+    if (nouvellesPhotos.isEmpty) return;
+
+    setState(() => _ajoutPhotoEnCours = true);
+
+    try {
+      await ref
+          .read(paiementControllerProvider(widget.commandeId).notifier)
+          .ajouterPhotos(nouvellesPhotos);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo(s) ajoutée(s) avec succès')),
+        );
+      }
+    } catch (e) {
+      _afficherErreur('Erreur lors de l\'ajout des photos : $e');
+    } finally {
+      if (mounted) setState(() => _ajoutPhotoEnCours = false);
+    }
+  }
+
+  void _afficherErreur(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: KColors.terracotta),
+    );
+  }
+
+  void _ouvrirPleinEcranImage(ImageProvider imageProvider) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.black,
+        insetPadding: EdgeInsets.zero,
+        child: Stack(
+          children: [
+            InteractiveViewer(
+              child: Center(
+                child: Image(image: imageProvider, fit: BoxFit.contain),
+              ),
+            ),
+            Positioned(
+              top: 40,
+              right: 20,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                onPressed: () => Navigator.pop(ctx),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- Gestion du statut ---
+
   Future<void> _changerStatutCommande(CommandeModel commande) async {
     final statuts = [
       {'code': 'attente', 'label': 'En attente'},
@@ -133,7 +185,7 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
             ),
             const Divider(),
             ...statuts.map(
-              (s) => ListTile(
+                  (s) => ListTile(
                 title: Text(s['label']!),
                 trailing: commande.statut.toLowerCase() == s['code']
                     ? const Icon(Icons.check_circle, color: KColors.indigo)
@@ -148,64 +200,22 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
 
     if (nouveauStatut != null && nouveauStatut != commande.statut) {
       try {
-        await _commandesRepo.modifier(commande.id, {'statut': nouveauStatut});
-
-        // 💡 Utilisation de ref.read pour notifier l'ensemble de l'appli
-        final ctr = ref.read(commandesControllerProvider);
-        final index = ctr.commandes.indexWhere((c) => c.id == commande.id);
-        if (index != -1) {
-          ctr.commandes[index] = ctr.commandes[index].copyWith(
-            statut: nouveauStatut,
-          );
-          ctr.notifyListeners(); // Rafraîchit aussi les autres pages à l'écoute !
-        }
-
-        // Mise à jour de l'affichage local instantanément
-        final dataActuelle = await _future;
-        final commandeModifiee = CommandeModel(
-          id: dataActuelle.commande.id,
-          clientId: dataActuelle.commande.clientId,
-          clientNom: dataActuelle.commande.clientNom,
-          typeVetement: dataActuelle.commande.typeVetement,
-          tissu: dataActuelle.commande.tissu,
-          prixTotal: dataActuelle.commande.prixTotal,
-          statut: nouveauStatut,
-          dateLivraisonPrevue: dataActuelle.commande.dateLivraisonPrevue,
-          montantPaye: dataActuelle.commande.montantPaye,
-          enAttente: dataActuelle.commande.enAttente,
-        );
-
-        setState(() {
-          _future = Future.value(
-            _PaiementData(
-              commande: commandeModifiee,
-              paiements: dataActuelle.paiements,
-            ),
-          );
-        });
-
-        _actualiserArrierePlan();
+        await ref
+            .read(paiementControllerProvider(widget.commandeId).notifier)
+            .changerStatut(nouveauStatut);
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Statut mis à jour : $nouveauStatut'),
-              duration: const Duration(seconds: 2),
-            ),
+            SnackBar(content: Text('Statut mis à jour : $nouveauStatut')),
           );
         }
       } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Erreur : $e'),
-              backgroundColor: KColors.terracotta,
-            ),
-          );
-        }
+        _afficherErreur('Erreur : $e');
       }
     }
   }
+
+  // --- Enregistrement du paiement ---
 
   Future<void> _enregistrerPaiement() async {
     final montant = double.tryParse(_montantCtrl.text.replaceAll(' ', ''));
@@ -219,15 +229,12 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
     setState(() => _envoiEnCours = true);
 
     try {
-      await _paiementsRepo.creer({
-        'commande': widget.commandeId,
-        'montant': montant,
-        'mode': _modeSelectionne,
-      });
+      await ref
+          .read(paiementControllerProvider(widget.commandeId).notifier)
+          .enregistrerPaiement(montant: montant, mode: _modeSelectionne);
 
       _montantCtrl.clear();
       FocusScope.of(context).unfocus();
-      setState(() => _future = _charger());
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -235,11 +242,7 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
         );
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Erreur : $e')));
-      }
+      _afficherErreur('Erreur : $e');
     } finally {
       if (mounted) setState(() => _envoiEnCours = false);
     }
@@ -247,9 +250,7 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
 
   @override
   Widget build(BuildContext context) {
-    // 💡 Écoute de Riverpod
-    ref.watch(commandesControllerProvider);
-
+    final asyncData = ref.watch(paiementControllerProvider(widget.commandeId));
     final fmt = NumberFormat.decimalPattern('fr');
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -259,32 +260,27 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
       ),
       child: Scaffold(
         body: SafeArea(
-          top: true,
-          bottom: false,
-          child: FutureBuilder<_PaiementData>(
-            future: _future,
-            builder: (context, snap) {
-              if (snap.hasError) {
-                return Center(
-                  child: Text(
-                    'Erreur : ${snap.error}',
-                    style: const TextStyle(color: KColors.terracotta),
-                  ),
-                );
-              }
-              if (!snap.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final data = snap.data!;
+          child: asyncData.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (err, stack) => Center(
+              child: Text(
+                'Erreur : $err',
+                style: const TextStyle(color: KColors.terracotta),
+              ),
+            ),
+            data: (data) {
               final c = data.commande;
-
               return CustomScrollView(
                 slivers: [
                   SliverToBoxAdapter(child: _buildHero(context, c, fmt)),
                   SliverToBoxAdapter(child: _buildSplitBar(c, fmt)),
-                  SliverToBoxAdapter(
+
+                  // 👈 Bloc Photos / Modèles
+                  SliverToBoxAdapter(child: _buildSectionPhotos(c)),
+
+                  const SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(18, 16, 18, 4),
+                      padding: EdgeInsets.fromLTRB(18, 16, 18, 4),
                       child: Text(
                         'HISTORIQUE DES PAIEMENTS',
                         style: TextStyle(
@@ -363,6 +359,129 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
             },
           ),
         ),
+      ),
+    );
+  }
+
+  // --- Composant d'affichage des photos ---
+
+  Widget _buildSectionPhotos(CommandeModel c) {
+    // Si votre modèle possède un champ pour les photos locales (hors-ligne) et enregistrées
+    final List<String> photosPocketBase = c.photos;
+    // Adaptez si vous avez un champ dédié aux fichiers locaux dans CommandeModel (ex: c.photosLocales)
+    final List<File> photosLocales = c.photosLocales ?? [];
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'PHOTOS / MODÈLES',
+                style: TextStyle(
+                  fontSize: 10,
+                  letterSpacing: 1,
+                  color: KColors.muted,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (_ajoutPhotoEnCours)
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 75,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                // Bouton Ajouter une photo
+                GestureDetector(
+                  onTap: _ajoutPhotoEnCours ? null : _afficherModalChoixPhoto,
+                  child: Container(
+                    width: 75,
+                    height: 75,
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: KColors.cardBorder),
+                    ),
+                    child: const Icon(
+                      Icons.add_a_photo,
+                      color: KColors.indigo,
+                      size: 22,
+                    ),
+                  ),
+                ),
+
+                // Photos chargées depuis PocketBase
+                ...photosPocketBase.map((nomFichier) {
+                  final imageUrl =
+                      '${pb.baseUrl}/api/files/commandes/${c.id}/$nomFichier';
+                  final imageProvider = NetworkImage(imageUrl);
+
+                  return GestureDetector(
+                    onTap: () => _ouvrirPleinEcranImage(imageProvider),
+                    child: Container(
+                      width: 75,
+                      height: 75,
+                      margin: const EdgeInsets.only(right: 8),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: KColors.cardBorder),
+                        image: DecorationImage(
+                          image: imageProvider,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+
+                // Photos locales en attente de synchronisation
+                ...photosLocales.map((file) {
+                  final imageProvider = FileImage(file);
+
+                  return GestureDetector(
+                    onTap: () => _ouvrirPleinEcranImage(imageProvider),
+                    child: Container(
+                      width: 75,
+                      height: 75,
+                      margin: const EdgeInsets.only(right: 8),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: KColors.indigo, width: 1.5),
+                        image: DecorationImage(
+                          image: imageProvider,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+
+                if (photosPocketBase.isEmpty && photosLocales.isEmpty)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.only(left: 8.0),
+                      child: Text(
+                        'Aucune photo',
+                        style: TextStyle(color: KColors.muted, fontSize: 12),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -572,13 +691,13 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
               onPressed: _envoiEnCours ? null : _enregistrerPaiement,
               child: _envoiEnCours
                   ? const SizedBox(
-                      height: 16,
-                      width: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
+                height: 16,
+                width: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
                   : const Text('Enregistrer'),
             ),
           ),
@@ -586,10 +705,4 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
       ),
     );
   }
-}
-
-class _PaiementData {
-  final CommandeModel commande;
-  final List<PaiementModel> paiements;
-  _PaiementData({required this.commande, required this.paiements});
 }
