@@ -55,7 +55,7 @@ class AuthService {
     await pb.collection('users').authWithPassword(email, motDePasse);
   }
 
-  void deconnecter() {
+  Future<void> deconnecter() async {
     pb.authStore.clear();
   }
 

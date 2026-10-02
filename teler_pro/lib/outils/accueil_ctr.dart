@@ -171,6 +171,7 @@ class AccueilController extends ValueNotifier<AccueilState> {
       // 3. Reconstruire l'interface avec les données synchronisées et enrichies
       final dataAjour = await _construireData();
       value = AccueilSuccess(dataAjour);
+      notifyListeners();
     } catch (e) {
       debugPrint('ERREUR SYNC ACCUEIL : $e');
       if (value is! AccueilSuccess) {

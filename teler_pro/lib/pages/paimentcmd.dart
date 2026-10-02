@@ -3,14 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart'; // 👈 Import Riverpod
 import 'package:intl/intl.dart';
-import 'package:pocketbase/pocketbase.dart';
-import 'package:teler_pro/controlers/commande_ctr.dart';
+import 'package:teler_pro/controlers/command_ctr/commande_ctr.dart';
+import 'package:teler_pro/controlers/paiment_ctr/paiement_controller.dart';
 import 'package:teler_pro/models/model.dart';
-import 'package:teler_pro/outils/providers.dart';
 import 'package:teler_pro/outils/themes.dart';
-import 'package:teler_pro/repo/offline_repo.dart';
 
-// 1. Conversion en ConsumerStatefulWidget
 class PaiementCommandePage extends ConsumerStatefulWidget {
   final String commandeId;
   const PaiementCommandePage({super.key, required this.commandeId});
@@ -24,19 +21,6 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
   final _montantCtrl = TextEditingController();
   String _modeSelectionne = 'tmoney';
   bool _envoiEnCours = false;
-  late Future<_PaiementData> _future;
-
-  // Dépôts locaux Hive
-  final _commandesRepo = OfflineRepository('commandes');
-  final _paiementsRepo = OfflineRepository('paiements');
-  final _clientsRepo = OfflineRepository('clients');
-
-  @override
-  void initState() {
-    super.initState();
-    _future = _charger();
-    _actualiserArrierePlan();
-  }
 
   @override
   void dispose() {
@@ -44,64 +28,6 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
     super.dispose();
   }
 
-  Future<void> _actualiserArrierePlan() async {
-    try {
-      await _clientsRepo.actualiser();
-      await _commandesRepo.actualiser();
-      await _paiementsRepo.actualiser(
-        filter: 'commande = "${widget.commandeId}"',
-      );
-      if (mounted) {
-        setState(() => _future = _charger());
-      }
-    } catch (_) {}
-  }
-
-  Future<_PaiementData> _charger() async {
-    final cacheClients = await _clientsRepo.lireCache();
-    final Map<String, String> mapClients = {
-      for (var c in cacheClients)
-        c['id'].toString(): (c['nom'] ?? c['nom_client'] ?? 'Client inconnu')
-            .toString(),
-    };
-
-    final cacheCommandes = await _commandesRepo.lireCache();
-    final commandeMap = cacheCommandes.firstWhere(
-      (c) => c['id'] == widget.commandeId,
-      orElse: () => {},
-    );
-
-    if (commandeMap.isEmpty) {
-      throw Exception("Commande introuvable dans le cache local.");
-    }
-
-    final commandeMapComplete = Map<String, dynamic>.from(commandeMap);
-    final clientId = commandeMapComplete['client']?.toString() ?? '';
-
-    if (!commandeMapComplete.containsKey('clientNom') ||
-        commandeMapComplete['clientNom'] == null ||
-        commandeMapComplete['clientNom'] == '—') {
-      commandeMapComplete['clientNom'] = mapClients[clientId] ?? '—';
-    }
-
-    final cachePaiements = await _paiementsRepo.lireCache();
-    final paiements = cachePaiements
-        .where((p) => p['commande'] == widget.commandeId)
-        .map((p) => PaiementModel.fromCacheMap(p))
-        .toList();
-
-    paiements.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
-    final montantPaye = paiements.fold<double>(0, (s, p) => s + p.montant);
-    final commande = CommandeModel.fromCacheMap(
-      commandeMapComplete,
-      montantPaye: montantPaye,
-    );
-
-    return _PaiementData(commande: commande, paiements: paiements);
-  }
-
-  // 🚀 Méthode de changement de statut réactivée et optimisée
   Future<void> _changerStatutCommande(CommandeModel commande) async {
     final statuts = [
       {'code': 'attente', 'label': 'En attente'},
@@ -148,50 +74,14 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
 
     if (nouveauStatut != null && nouveauStatut != commande.statut) {
       try {
-        await _commandesRepo.modifier(commande.id, {'statut': nouveauStatut});
-
-        // 💡 Utilisation de ref.read pour notifier l'ensemble de l'appli
-        final ctr = ref.read(commandesControllerProvider);
-        final index = ctr.commandes.indexWhere((c) => c.id == commande.id);
-        if (index != -1) {
-          ctr.commandes[index] = ctr.commandes[index].copyWith(
-            statut: nouveauStatut,
-          );
-          ctr.notifyListeners(); // Rafraîchit aussi les autres pages à l'écoute !
-        }
-
-        // Mise à jour de l'affichage local instantanément
-        final dataActuelle = await _future;
-        final commandeModifiee = CommandeModel(
-          id: dataActuelle.commande.id,
-          clientId: dataActuelle.commande.clientId,
-          clientNom: dataActuelle.commande.clientNom,
-          typeVetement: dataActuelle.commande.typeVetement,
-          tissu: dataActuelle.commande.tissu,
-          prixTotal: dataActuelle.commande.prixTotal,
-          statut: nouveauStatut,
-          dateLivraisonPrevue: dataActuelle.commande.dateLivraisonPrevue,
-          montantPaye: dataActuelle.commande.montantPaye,
-          enAttente: dataActuelle.commande.enAttente,
-        );
-
-        setState(() {
-          _future = Future.value(
-            _PaiementData(
-              commande: commandeModifiee,
-              paiements: dataActuelle.paiements,
-            ),
-          );
-        });
-
-        _actualiserArrierePlan();
+        //  Apport au contrôleur Riverpod
+        await ref
+            .read(paiementControllerProvider(widget.commandeId).notifier)
+            .changerStatut(nouveauStatut);
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Statut mis à jour : $nouveauStatut'),
-              duration: const Duration(seconds: 2),
-            ),
+            SnackBar(content: Text('Statut mis à jour : $nouveauStatut')),
           );
         }
       } catch (e) {
@@ -219,15 +109,12 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
     setState(() => _envoiEnCours = true);
 
     try {
-      await _paiementsRepo.creer({
-        'commande': widget.commandeId,
-        'montant': montant,
-        'mode': _modeSelectionne,
-      });
+      await ref
+          .read(paiementControllerProvider(widget.commandeId).notifier)
+          .enregistrerPaiement(montant: montant, mode: _modeSelectionne);
 
       _montantCtrl.clear();
       FocusScope.of(context).unfocus();
-      setState(() => _future = _charger());
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -247,9 +134,8 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
 
   @override
   Widget build(BuildContext context) {
-    // 💡 Écoute de Riverpod
-    ref.watch(commandesControllerProvider);
-
+    // 💡 Écoute réactive de l'état du contrôleur
+    final asyncData = ref.watch(paiementControllerProvider(widget.commandeId));
     final fmt = NumberFormat.decimalPattern('fr');
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -259,32 +145,23 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
       ),
       child: Scaffold(
         body: SafeArea(
-          top: true,
-          bottom: false,
-          child: FutureBuilder<_PaiementData>(
-            future: _future,
-            builder: (context, snap) {
-              if (snap.hasError) {
-                return Center(
-                  child: Text(
-                    'Erreur : ${snap.error}',
-                    style: const TextStyle(color: KColors.terracotta),
-                  ),
-                );
-              }
-              if (!snap.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final data = snap.data!;
+          child: asyncData.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (err, stack) => Center(
+              child: Text(
+                'Erreur : $err',
+                style: const TextStyle(color: KColors.terracotta),
+              ),
+            ),
+            data: (data) {
               final c = data.commande;
-
               return CustomScrollView(
                 slivers: [
                   SliverToBoxAdapter(child: _buildHero(context, c, fmt)),
                   SliverToBoxAdapter(child: _buildSplitBar(c, fmt)),
-                  SliverToBoxAdapter(
+                  const SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(18, 16, 18, 4),
+                      padding: EdgeInsets.fromLTRB(18, 16, 18, 4),
                       child: Text(
                         'HISTORIQUE DES PAIEMENTS',
                         style: TextStyle(
@@ -366,6 +243,8 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
       ),
     );
   }
+
+  // --- Vos widgets auxiliaires (_buildHero, _buildSplitBar, _buildAjoutPaiement) conservent le même style UI ---
 
   Widget _buildHero(BuildContext context, CommandeModel c, NumberFormat fmt) {
     return Container(

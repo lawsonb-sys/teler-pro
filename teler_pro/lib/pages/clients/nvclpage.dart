@@ -1,17 +1,18 @@
 import 'package:flutter/material.dart';
-import 'package:teler_pro/controlers/client_ctr.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:riverpod/src/framework.dart';
+import 'package:teler_pro/controlers/clients_ctr/clients_controller.dart';
 import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/outils/themes.dart';
 
-class NouveauClientPage extends StatefulWidget {
-  final ClientsController controller;
-  const NouveauClientPage({super.key, required this.controller});
+class NouveauClientPage extends ConsumerStatefulWidget {
+  const NouveauClientPage({super.key});
 
   @override
-  State<NouveauClientPage> createState() => _NouveauClientPageState();
+  ConsumerState<NouveauClientPage> createState() => _NouveauClientPageState();
 }
 
-class _NouveauClientPageState extends State<NouveauClientPage> {
+class _NouveauClientPageState extends ConsumerState<NouveauClientPage> {
   final _nomCtrl = TextEditingController();
   final _telephoneCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
@@ -32,15 +33,19 @@ class _NouveauClientPageState extends State<NouveauClientPage> {
     try {
       final atelier = await atelierService.atelierCourant();
       final atelierId = atelier['id'] as String;
-      await widget.controller.ajouter({
+      final Map<String, dynamic> _body = {
         'atelier': atelierId,
         'nom': _nomCtrl.text.trim(),
         'telephone': _telephoneCtrl.text.trim(),
         'notes': _notesCtrl.text.trim(),
-      });
-      if (mounted) Navigator.pop(context);
+      };
+      await ref
+          .read(clientsControllerProvider.notifier)
+          .enregistrerclient(_body);
+
+      if (mounted) Navigator.pop(context, true);
     } catch (e) {
-      setState(() => _erreur = 'Une erreur est survenue : $e');
+      if (mounted) setState(() => _erreur = 'Une erreur est survenue : $e');
     } finally {
       if (mounted) setState(() => _envoiEnCours = false);
     }

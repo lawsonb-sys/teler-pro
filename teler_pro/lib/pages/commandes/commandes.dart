@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart'; // 👈 Import Riverpod
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import 'package:teler_pro/controlers/commande_ctr.dart';
+import 'package:teler_pro/controlers/command_ctr/commande_ctr.dart';
 import 'package:teler_pro/models/model.dart';
-import 'package:teler_pro/outils/providers.dart';
 import 'package:teler_pro/outils/themes.dart';
+import 'package:teler_pro/pages/commandes/nvcommande.dart';
 import 'package:teler_pro/pages/paimentcmd.dart';
+import 'package:teler_pro/provider/test_ctr.dart';
 
-// 1. Conversion en ConsumerStatefulWidget
 class CommandesPage extends ConsumerStatefulWidget {
   const CommandesPage({super.key});
 
@@ -25,94 +25,202 @@ class _CommandesPageState extends ConsumerState<CommandesPage> {
   ];
 
   @override
-  void initState() {
-    super.initState();
-    // 💡 Chargement initial via le provider Riverpod (micro-tâche pour éviter les conflits d'init)
-    Future.microtask(() {
-      ref.read(commandesControllerProvider).charger();
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
-    // 💡 Écoute de tout changement dans le contrôleur via Riverpod
-    final controller = ref.watch(commandesControllerProvider);
+    final statecmd = ref.watch(commandesControllerProvider);
+    final controller = ref.read(commandesControllerProvider.notifier);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Commandes')),
-      body: Column(
+      body: SafeArea(
+        child: statecmd.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (err, stack) => Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                const SizedBox(height: 12),
+                Text(
+                  'Erreur: $err',
+                  style: const TextStyle(color: KColors.terracotta),
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  onPressed: () => controller.rafraichir(),
+                  child: const Text('Réessayer'),
+                ),
+              ],
+            ),
+          ),
+          data: (commandes) {
+            return RefreshIndicator(
+              onRefresh: () async => controller.rafraichir(),
+              child: CustomScrollView(
+                slivers: [
+                  // 1. En-tête Hero identique à la page d'accueil
+                  SliverToBoxAdapter(
+                    child: _buildHeader(
+                      totalCommandes: commandes.length,
+                      filtreActuel: controller.filtreActuel,
+                      onFiltreChanged: (val) => controller.changerFiltre(val),
+                    ),
+                  ),
+
+                  // 2. Espace / Marge sous le header
+                  const SliverToBoxAdapter(child: SizedBox(height: 12)),
+
+                  // 3. Message si liste vide
+                  if (commandes.isEmpty)
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 60),
+                        child: Center(
+                          child: Text(
+                            'Aucune commande enregistrée.',
+                            style: TextStyle(
+                              color: KColors.muted,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    // 4. Liste des cartes de commandes
+                    SliverList.builder(
+                      itemCount: commandes.length,
+                      itemBuilder: (context, i) =>
+                          _CommandeCard(commande: commandes[i]),
+                    ),
+
+                  const SliverToBoxAdapter(child: SizedBox(height: 90)),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        heroTag: 'fab_commandes_page',
+        onPressed: () async {
+          final cree = await Navigator.push<bool>(
+            context,
+            MaterialPageRoute(builder: (_) => const NouvelleCommandePage()),
+          );
+
+          if (cree == true && context.mounted) {
+            ref.invalidate(commandesControllerProvider);
+            ref.invalidate(accueilControllerProvider);
+          }
+        },
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+
+  /// En-tête bleu indigo inspiré de la page Accueil
+  Widget _buildHeader({
+    required int totalCommandes,
+    required String filtreActuel,
+    required ValueChanged<String> onFiltreChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+      decoration: const BoxDecoration(
+        color: KColors.indigo,
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            height: 44,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'GESTION',
+                    style: TextStyle(
+                      fontSize: 11,
+                      letterSpacing: 1.2,
+                      color: KColors.brassLight,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Commandes',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+              // Badge réactif du nombre de commandes affichées
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Text(
+                  '$totalCommandes commande${totalCommandes > 1 ? 's' : ''}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: KColors.brassLight,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Barre horizontale de filtres sous forme de Chips dans le Header
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
               children: _filtres.map((f) {
-                final (value, label) = f;
-                final actif = controller.filtre == value;
+                final estSelectionne = filtreActuel == f.$1;
                 return Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: ChoiceChip(
-                    label: Text(label),
-                    selected: actif,
-                    onSelected: (_) => controller.changerFiltre(value),
-                    selectedColor: KColors.indigo,
+                    label: Text(f.$2),
+                    selected: estSelectionne,
+                    onSelected: (_) {
+                      ref
+                          .read(commandesControllerProvider.notifier)
+                          .changerFiltre(f.$1);
+                    },
+                    selectedColor: KColors.brassLight,
+                    backgroundColor: Colors.white.withValues(alpha: 0.5),
                     labelStyle: TextStyle(
                       fontSize: 11,
-                      color: actif ? Colors.white : KColors.muted,
+                      fontWeight: FontWeight.w600,
+                      color: KColors.indigo,
                     ),
-                    side: BorderSide(
-                      color: actif ? KColors.indigo : KColors.cardBorder,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(
+                        color: estSelectionne
+                            ? KColors.brassLight
+                            : Colors.transparent,
+                      ),
                     ),
-                    backgroundColor: Colors.white,
+                    showCheckmark: false,
                   ),
                 );
               }).toList(),
             ),
           ),
-          Expanded(child: _buildCorps(controller)),
         ],
       ),
-    );
-  }
-
-  Widget _buildCorps(CommandesController controller) {
-    if (controller.erreur != null) {
-      return Center(
-        child: Text(
-          controller.erreur!,
-          style: const TextStyle(color: KColors.terracotta),
-        ),
-      );
-    }
-    if (controller.chargement && controller.commandes.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    final commandes = controller.commandes;
-
-    return RefreshIndicator(
-      onRefresh: controller.charger,
-      child: commandes.isEmpty
-          ? ListView(
-              children: [
-                SizedBox(
-                  height: MediaQuery.of(context).size.height * 0.6,
-                  child: const Center(
-                    child: Text(
-                      'Aucune commande',
-                      style: TextStyle(color: KColors.muted),
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.only(bottom: 16),
-              itemCount: commandes.length,
-              itemBuilder: (context, i) =>
-                  _CommandeCard(commande: commandes[i]),
-            ),
     );
   }
 }
@@ -170,7 +278,9 @@ class _CommandeCard extends StatelessWidget {
                         Row(
                           children: [
                             Text(
-                              commande.clientNom,
+                              commande.clientNom.isNotEmpty
+                                  ? commande.clientNom
+                                  : '—',
                               style: const TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
