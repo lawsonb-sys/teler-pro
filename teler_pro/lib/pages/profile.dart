@@ -154,7 +154,7 @@ class _ProfilPageState extends ConsumerState<ProfilPage> {
         userId,
         bodyAtelier,
         bodyUser,
-        _imageSelectionnee!, // Accepte null si aucune nouvelle photo n'a été choisie
+        _imageSelectionnee, // Accepte null si aucune nouvelle photo n'a été choisie
       );
 
       if (mounted) {

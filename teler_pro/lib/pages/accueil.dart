@@ -231,7 +231,7 @@ class _AccueilScreenState extends ConsumerState<AccueilScreen> {
               const Text(
                 'Atelier : ',
                 style: TextStyle(
-                  fontSize: 21,
+                  fontSize: 18,
                   fontWeight: FontWeight.w600,
                   color: KColors.brassLight,
                 ),
@@ -239,7 +239,7 @@ class _AccueilScreenState extends ConsumerState<AccueilScreen> {
               Text(
                 nomAtelier,
                 style: const TextStyle(
-                  fontSize: 21,
+                  fontSize: 18,
                   fontWeight: FontWeight.w600,
                   color: Colors.white,
                 ),

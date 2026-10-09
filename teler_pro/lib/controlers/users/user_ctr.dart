@@ -94,16 +94,26 @@ class AtelierUserNotifier extends AsyncNotifier<AtelierUserData> {
     return AtelierUserData(user: finalUser, atelier: finalAtelier);
   }
 
-  Future<void> modifier(String atelierid,String userID, Map<String, dynamic> body,Map<String, dynamic> bodyuser,File nvImage) async {
+  Future<void> modifier(
+    String atelierid,
+    String userID,
+    Map<String, dynamic> body,
+    Map<String, dynamic> bodyuser,
+    File? nvImage,
+  ) async {
     await _ateliersRepo.modifierTexte(atelierid, body);
-    List<http.MultipartFile> files = [];
-    if(nvImage != null){
-      files.add(await http.MultipartFile.fromPath('avatar', nvImage.path));
+    if (nvImage != null && await nvImage.exists()) {
+      await _usersRepo.modifierAvecPhotos(
+        userID,
+        bodyuser,
+        photos: [nvImage],
+        nomChampFichier: 'avatar',
+      );
+    } else {
+      await _usersRepo.modifierTexte(userID, bodyuser);
     }
-    await _usersRepo.modifierAvecPhotos(userID, bodyuser, photos: []);
     await rafraichir(); // Recharger l'état réactif après modification
     ref.read(syncManagerProvider.notifier).synchronizeCollections();
-
   }
 
   /// Rafraîchir manuellement les données
