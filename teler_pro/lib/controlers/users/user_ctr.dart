@@ -100,17 +100,12 @@ class AtelierUserNotifier extends AsyncNotifier<AtelierUserData> {
     if(nvImage != null){
       files.add(await http.MultipartFile.fromPath('avatar', nvImage.path));
     }
-    await _usersRepo.modifierAvecPhotos(userID, bodyuser,files: files, photos: []);
+    await _usersRepo.modifierAvecPhotos(userID, bodyuser, photos: []);
     await rafraichir(); // Recharger l'état réactif après modification
     ref.read(syncManagerProvider.notifier).synchronizeCollections();
 
   }
-  // Future<void> supprimer(String atelierid) async {
-  //   await _ateliersRepo.supprimer(atelierid);
-  //   ref.invalidateSelf();
-  //   await rafraichir(); // Recharger l'état réactif après modification
-  //   ref.read(syncManagerProvider.notifier).synchronizeCollections();
-  // }
+
   /// Rafraîchir manuellement les données
   Future<void> rafraichir() async {
     state = const AsyncLoading();

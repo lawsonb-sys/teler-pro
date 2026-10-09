@@ -250,7 +250,7 @@ class _FicheClientPageState extends ConsumerState<FicheClientPage> {
             ),
             onPressed: () async {
               if (!formKey.currentState!.validate()) return;
-              print('enr appuyer');
+
               final donneesModifiees = {
                 'nom': nomController.text.trim(),
                 'telephone': telephoneController.text.trim(),
@@ -259,16 +259,18 @@ class _FicheClientPageState extends ConsumerState<FicheClientPage> {
               try {
                 await modifclient(donneesModifiees, client.id);
 
+                if (!ctx.mounted) return;
                 Navigator.pop(ctx);
                 _rafraichirPage();
 
+                if (!context.mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Client modifié avec succès')),
                 );
               } catch (e) {
                 if (ctx.mounted) {
                   ScaffoldMessenger.of(
-                    context,
+                    ctx,
                   ).showSnackBar(SnackBar(content: Text('Erreur : $e')));
                 }
               }
@@ -543,11 +545,10 @@ class _FicheClientPageState extends ConsumerState<FicheClientPage> {
       try {
         await _mesuresRepo.supprimer(mesure.id!);
       } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Erreur : $e')));
-        }
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erreur : $e')));
       }
     }
   }

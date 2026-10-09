@@ -3,10 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:teler_pro/controlers/clients_ctr/clients_controller.dart';
 import 'package:teler_pro/models/model.dart';
-import 'package:teler_pro/models/pocketbase.dart';
 import 'package:teler_pro/outils/themes.dart';
 import 'package:teler_pro/pages/clients/ficheclients.dart';
 import 'package:teler_pro/pages/clients/nvclpage.dart';
+import 'package:teler_pro/repo/offline_repo.dart';
 
 import '../../outils/dialogue.dart';
 
@@ -121,10 +121,12 @@ class _ClientTile extends ConsumerWidget {
   const _ClientTile({required this.client, required this.onTap});
 
   Future<int> _getNombreCommandes(String clientId) async {
-    final records = await pb
-        .collection('commandes')
-        .getFullList(filter: 'client = "$clientId"');
-    return records.length;
+    try {
+      final commandesBrutes = await OfflineRepository('commandes').lireCache();
+      return commandesBrutes.where((cmd) => cmd['client'] == clientId).length;
+    } catch (_) {
+      return 0;
+    }
   }
 
 
@@ -139,7 +141,7 @@ class _ClientTile extends ConsumerWidget {
       },
       onDismissed: (direction) {
         // Appelle la méthode dans le controller
-        ref.read(clientsControllerProvider.notifier).SupprimerClient(client.id);
+        ref.read(clientsControllerProvider.notifier).supprimerClient(client.id);
       },
       background: Container(
         alignment: Alignment.centerRight,

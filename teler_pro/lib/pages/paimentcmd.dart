@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
-import 'package:teler_pro/controlers/command_ctr/commande_ctr.dart';
 import 'package:teler_pro/controlers/paiment_ctr/paiement_controller.dart';
 import 'package:teler_pro/models/model.dart';
 import 'package:teler_pro/models/pocketbase.dart'; // Import pour 'pb' ou l'URL PocketBase
@@ -234,13 +233,12 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
           .enregistrerPaiement(montant: montant, mode: _modeSelectionne);
 
       _montantCtrl.clear();
-      FocusScope.of(context).unfocus();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Paiement enregistré avec succès')),
-        );
-      }
+      if (!mounted) return;
+      FocusScope.of(context).unfocus();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Paiement enregistré avec succès')),
+      );
     } catch (e) {
       _afficherErreur('Erreur : $e');
     } finally {
@@ -425,7 +423,7 @@ class _PaiementCommandePageState extends ConsumerState<PaiementCommandePage> {
                 // Photos chargées depuis PocketBase
                 ...photosPocketBase.map((nomFichier) {
                   final imageUrl =
-                      '${pb.baseUrl}/api/files/commandes/${c.id}/$nomFichier';
+                      '${pb.baseURL}/api/files/commandes/${c.id}/$nomFichier';
                   final imageProvider = NetworkImage(imageUrl);
 
                   return GestureDetector(

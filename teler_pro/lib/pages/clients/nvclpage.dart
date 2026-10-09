@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:riverpod/src/framework.dart';
 import 'package:teler_pro/controlers/clients_ctr/clients_controller.dart';
 import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/outils/themes.dart';
@@ -33,7 +32,7 @@ class _NouveauClientPageState extends ConsumerState<NouveauClientPage> {
     try {
       final atelier = await atelierService.atelierCourant();
       final atelierId = atelier['id'] as String;
-      final Map<String, dynamic> _body = {
+      final Map<String, dynamic> body = {
         'atelier': atelierId,
         'nom': _nomCtrl.text.trim(),
         'telephone': _telephoneCtrl.text.trim(),
@@ -41,7 +40,7 @@ class _NouveauClientPageState extends ConsumerState<NouveauClientPage> {
       };
       await ref
           .read(clientsControllerProvider.notifier)
-          .enregistrerclient(_body);
+          .enregistrerclient(body);
 
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -108,7 +107,7 @@ class _NouveauClientPageState extends ConsumerState<NouveauClientPage> {
                       ),
                     )
                   : const Text('Enregistrer'),
-            ),
+              ),
           ],
         ),
       ),

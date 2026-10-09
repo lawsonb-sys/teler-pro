@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io'; // 👈 Import obligatoire pour la gestion des fichiers
+import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:teler_pro/controlers/command_ctr/commande_ctr.dart';
 import 'package:teler_pro/models/model.dart';
@@ -30,6 +31,14 @@ class PaiementController extends _$PaiementController {
 
   // Chargement unifié depuis le cache local (Hive)
   Future<PaiementDataState> _charger(String commandeId) async {
+    try {
+      await _commandesRepo.actualiser();
+      await _paiementsRepo.actualiser();
+      await _clientsRepo.actualiser();
+    } catch (e) {
+      debugPrint('⚠️ [PaiementController] Mode hors-ligne ou erreur réseau: $e');
+    }
+
     final cacheClients = await _clientsRepo.lireCache();
     final Map<String, String> mapClients = {
       for (var c in cacheClients)
@@ -128,7 +137,7 @@ class PaiementController extends _$PaiementController {
       {},          // 2e argument positionnel : body (Map vide)
       photos: nouvellesPhotos,
       nomChampFichier: 'photos',
-      files: [],   // Requis par la signature de votre méthode
+
     );
 
     // Invalidation et rafraîchissement

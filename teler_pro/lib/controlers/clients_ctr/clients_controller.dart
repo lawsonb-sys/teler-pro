@@ -24,6 +24,13 @@ class ClientsController extends _$ClientsController {
 
   // --- Chargement Hybride (Cache immédiat + Sync Réseau) ---
   Future<List<ClientModel>> chargerDonnees() async {
+    try {
+      final idAtelier = await atelierId;
+      await _clientsRepo.actualiser(filter: 'atelier = "$idAtelier"');
+    } catch (e) {
+      debugPrint('⚠️ [ClientsController] Mode hors-ligne ou erreur réseau: $e');
+    }
+
     final cache = await _clientsRepo.lireCache();
     final clientsLocales = await _construireListe(cache);
     return clientsLocales;
@@ -74,16 +81,12 @@ class ClientsController extends _$ClientsController {
           .map((cmd) => CommandeModel.fromMap(cmd))
           .toList();
     } catch (e) {
-      print('Erreur lors du chargement des commandes du client $clientId : $e');
+      debugPrint('Erreur lors du chargement des commandes du client $clientId : $e');
       return [];
     }
   }
 
-  /// Optionnel : Enrichir un objet [ClientModel] existant avec sa liste de commandes
-  /*  Future<ClientModel> enrichirClientAvecCommandes(ClientModel client) async {
-    final commandes = await chargerCommandesDuClient(client.id);
-    return client.copyWith(commandes: commandes);
-  }*/
+
 
   /// Modifier les informations d'un client existant
   Future<void> modifier(String clientId, Map<String, dynamic> body) async {
@@ -116,17 +119,17 @@ class ClientsController extends _$ClientsController {
     }
   }
 
-  Future<void> SupprimerClient(String clientId) async {
+  Future<void> supprimerClient(String clientId) async {
     state.whenData((client) {
       state = AsyncData(client.where((c) => c.id != clientId).toList());
     });
     try {
       await _clientsRepo.supprimer(clientId);
       ref.read(syncManagerProvider.notifier).synchronizeCollections();
-    }catch(e , st){
+    } catch (e) {
+      debugPrint('Erreur lors de la suppression du client : $e');
       ref.invalidateSelf();
     }
-
   }
 
   /// Méthode spécifique pour le RefreshIndicator de la vue

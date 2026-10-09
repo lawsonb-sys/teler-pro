@@ -33,7 +33,7 @@ final class ClientsControllerProvider
   ClientsController create() => ClientsController();
 }
 
-String _$clientsControllerHash() => r'342411f6ba36cc0bbf82ed39f122d39d9967fa3e';
+String _$clientsControllerHash() => r'd4d0ad7f89fb8659baf2047594e51379a48bbe98';
 
 abstract class _$ClientsController extends $AsyncNotifier<List<ClientModel>> {
   FutureOr<List<ClientModel>> build();

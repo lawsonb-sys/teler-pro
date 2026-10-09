@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:teler_pro/controlers/command_ctr/commande_ctr.dart';
 import 'package:teler_pro/models/model.dart';
 import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/provider/repo_provider.dart';
+import 'package:teler_pro/provider/test_ctr.dart';
 import 'package:teler_pro/repo/offline_repo.dart';
 
 part 'nv_cmd_ctr.g.dart';
