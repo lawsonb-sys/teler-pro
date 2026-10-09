@@ -5,6 +5,8 @@ import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/provider/repo_provider.dart';
 import 'package:teler_pro/repo/offline_repo.dart';
 
+import '../../provider/test_ctr.dart';
+
 part 'commande_ctr.g.dart';
 
 @riverpod
@@ -26,7 +28,15 @@ class CommandesController extends _$CommandesController {
     final atelier = await atelierService.atelierCourant();
     final atelierId = atelier['id'] as String;
 
-    // 1. Chargement instantané depuis le cache local (Hive)
+    // 1. Tente d'actualiser depuis le serveur en arrière-plan si connecté
+    try {
+      await _commandesRepo.actualiser(filter: 'atelier = "$atelierId"');
+      await _paiementsRepo.actualiser();
+    } catch (e) {
+      debugPrint('⚠️ [CommandesController] Mode hors-ligne ou erreur réseau: $e');
+    }
+
+    // 2. Chargement depuis le cache local (Hive)
     final cache = await _commandesRepo.lireCache();
     final paiementsCache = await _paiementsRepo.lireCache();
     final commandesLocales = await _construireListe(
@@ -110,17 +120,16 @@ class CommandesController extends _$CommandesController {
   }
 
   // --- ACTIONS ---
-  Future<void> suprimerCommande(String commandeId) async {
-    state.whenData((commande) {
-      state = AsyncData(commande.where((c) => c.id != commandeId).toList());
-    });
-    try {
-      await _commandesRepo.supprimer(commandeId);
-      ref.read(syncManagerProvider.notifier).synchronizeCollections();
-    }catch(e , st){
-      ref.invalidateSelf();
-    }
+  Future<void> supprimerCommande(String id) async {
+    // 1. Suppression dans le repository local / Hive
+    await _commandesRepo.supprimer(id);
 
+    // 2. Invalidation pour recharger immédiatement la liste Riverpod
+    ref.invalidateSelf();
+    ref.invalidate(accueilControllerProvider);
+
+    // 3. Synchronisation différée
+    ref.read(syncManagerProvider.notifier).synchronizeCollections();
   }
 
   /// Changer le filtre de recherche (Toutes, En attente, Livré, etc.)

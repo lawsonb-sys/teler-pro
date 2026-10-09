@@ -2,11 +2,9 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
-import 'package:teler_pro/controlers/command_ctr/commande_ctr.dart';
 import 'package:teler_pro/models/model.dart';
 import 'package:teler_pro/outils/atelier_serevice.dart';
 import 'package:teler_pro/provider/repo_provider.dart';
-import 'package:teler_pro/provider/test_ctr.dart';
 import 'package:teler_pro/repo/offline_repo.dart';
 
 part 'nv_cmd_ctr.g.dart';
@@ -78,7 +76,9 @@ class NouvelleCommandeController extends _$NouvelleCommandeController {
 
     if (!ref.mounted) return commandeCreated;
 
-    // 3. Déclenchement de la synchronisation en tâche de fond
+    // 3. Invalidation des providers et déclenchement de la synchronisation en tâche de fond
+    ref.invalidate(commandesControllerProvider);
+    ref.invalidate(accueilControllerProvider);
     ref.read(syncManagerProvider.notifier).synchronizeCollections();
 
     return commandeCreated;

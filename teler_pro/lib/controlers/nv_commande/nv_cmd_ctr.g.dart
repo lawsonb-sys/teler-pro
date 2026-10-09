@@ -36,7 +36,7 @@ final class NouvelleCommandeControllerProvider
 }
 
 String _$nouvelleCommandeControllerHash() =>
-    r'65ebf8580f8d3d38c0b891bf924dd6ff7dd4b8d2';
+    r'db2d16debff2434adefe225b82e88446284c1d98';
 
 abstract class _$NouvelleCommandeController
     extends $AsyncNotifier<List<ClientModel>> {

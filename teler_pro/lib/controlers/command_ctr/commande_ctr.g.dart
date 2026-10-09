@@ -34,7 +34,7 @@ final class CommandesControllerProvider
 }
 
 String _$commandesControllerHash() =>
-    r'6f5296ebc7e40031ae08f4391eb54d58cc1c7ee3';
+    r'f3515a1259f061cc80bae6eafa3dd4ef2f8dfeae';
 
 abstract class _$CommandesController
     extends $AsyncNotifier<List<CommandeModel>> {

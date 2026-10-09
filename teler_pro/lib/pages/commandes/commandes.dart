@@ -90,8 +90,12 @@ class _CommandesPageState extends ConsumerState<CommandesPage> {
                     // 4. Liste des cartes de commandes
                     SliverList.builder(
                       itemCount: commandes.length,
-                      itemBuilder: (context, i) =>
-                          _CommandeCard(commande: commandes[i]),
+                      itemBuilder: (context, i) => _CommandeCard(
+                        commande: commandes[i],
+                        onDelete: () => ref
+                            .read(commandesControllerProvider.notifier)
+                            .supprimerCommande(commandes[i].id),
+                      ),
                     ),
 
                   const SliverToBoxAdapter(child: SizedBox(height: 90)),
@@ -227,30 +231,38 @@ class _CommandesPageState extends ConsumerState<CommandesPage> {
   }
 }
 
-class _CommandeCard extends StatelessWidget {
+class _CommandeCard extends StatefulWidget {
   final CommandeModel commande;
-  const _CommandeCard({required this.commande});
+  final VoidCallback onDelete;
+  const _CommandeCard({required this.commande, required this.onDelete});
 
+  @override
+  State<_CommandeCard> createState() => _CommandeCardState();
+}
+
+class _CommandeCardState extends State<_CommandeCard> {
   @override
   Widget build(BuildContext context) {
     final fmt = NumberFormat.decimalPattern('fr');
-    final dateStr = commande.dateLivraisonPrevue != null
-        ? DateFormat('d MMM', 'fr').format(commande.dateLivraisonPrevue!)
+    final dateStr = widget.commande.dateLivraisonPrevue != null
+        ? DateFormat('d MMM', 'fr').format(widget.commande.dateLivraisonPrevue!)
         : '—';
 
     final detailsText = [
-      commande.typeVetement,
-      if (commande.tissu != null && commande.tissu!.isNotEmpty) commande.tissu!,
+      widget.commande.typeVetement,
+      if (widget.commande.tissu != null && widget.commande.tissu!.isNotEmpty) widget.commande.tissu!,
     ].join(' — ');
 
     return Dismissible(
-      key: Key(commande.id),
+      key: Key(widget.commande.id),
       direction: DismissDirection.endToStart,
       confirmDismiss: (direction) async {
-        final reponse = await afficherDialogue(context,'Voulez-vous vraiment supprimer cette commande ?');
+        final reponse = await afficherDialogue(context, 'Voulez-vous vraiment supprimer cette commande ?');
         return reponse ?? false;
       },
-      onDismissed: (direction) {},
+      onDismissed: (direction) {
+        widget.onDelete();
+      },
       background: Container(
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 20),
@@ -266,7 +278,7 @@ class _CommandeCard extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
           onTap: () {
-            if (commande.enAttente) {
+            if (widget.commande.enAttente) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text(
@@ -279,7 +291,7 @@ class _CommandeCard extends StatelessWidget {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => PaiementCommandePage(commandeId: commande.id),
+                builder: (_) => PaiementCommandePage(commandeId: widget.commande.id),
               ),
             );
           },
@@ -298,15 +310,15 @@ class _CommandeCard extends StatelessWidget {
                           Row(
                             children: [
                               Text(
-                                commande.clientNom.isNotEmpty
-                                    ? commande.clientNom
+                                widget.commande.clientNom.isNotEmpty
+                                    ? widget.commande.clientNom
                                     : '—',
                                 style: const TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
-                              if (commande.enAttente) ...[
+                              if (widget.commande.enAttente) ...[
                                 const SizedBox(width: 6),
                                 const Icon(
                                   Icons.cloud_off,
@@ -327,14 +339,14 @@ class _CommandeCard extends StatelessWidget {
                         ],
                       ),
                     ),
-                    StatutBadge(statut: commande.statut),
+                    StatutBadge(statut: widget.commande.statut),
                   ],
                 ),
                 const SizedBox(height: 12),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(4),
                   child: LinearProgressIndicator(
-                    value: commande.progression.clamp(0.0, 1.0),
+                    value: widget.commande.progression.clamp(0.0, 1.0),
                     minHeight: 4,
                     backgroundColor: const Color(0xFFEDE6D5),
                     valueColor: const AlwaysStoppedAnimation(
@@ -347,8 +359,8 @@ class _CommandeCard extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      commande.soldeDu > 0
-                          ? 'Solde dû · ${fmt.format(commande.soldeDu)} FCFA'
+                      widget.commande.soldeDu > 0
+                          ? 'Solde dû · ${fmt.format(widget.commande.soldeDu)} FCFA'
                           : 'Payée intégralement',
                       style: const TextStyle(
                         fontSize: 10,
